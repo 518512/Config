@@ -2,7 +2,7 @@ proxy-groups:
   - name: 🏠 Home
     include-all: true
     filter: (?i)Home|直连|DIRECT
-    type: url-test
+    type: select
     proxies:
       - DIRECT
     interval: 300
@@ -10,7 +10,7 @@ proxy-groups:
   - name: 🏠 LYHome
     include-all: true
     filter: (?i)LYJ|LY
-    type: url-test
+    type: select
     proxies:
       - DIRECT
     interval: 300
