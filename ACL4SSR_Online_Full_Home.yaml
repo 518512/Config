@@ -3,6 +3,8 @@ proxy-groups:
     include-all: true
     filter: (?i)Home|直连|DIRECT
     type: url-test
+    proxies:
+      - DIRECT
     interval: 300
     tolerance: 50
   - name: 🚀 节点选择
