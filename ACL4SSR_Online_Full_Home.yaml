@@ -7,6 +7,14 @@ proxy-groups:
       - DIRECT
     interval: 300
     tolerance: 50
+  - name: 🏠 LYHome
+    include-all: true
+    filter: (?i)LYJ|LY
+    type: url-test
+    proxies:
+      - DIRECT
+    interval: 300
+    tolerance: 50
   - name: 🚀 节点选择
     type: select
     proxies:
@@ -485,9 +493,17 @@ rule-providers:
     interval: 86400
     format: text
     type: http
+  LYHome:
+    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LYJ.list
+    path: ./ruleset/LYJHome.list
+    behavior: classical
+    interval: 86400
+    format: text
+    type: http
 
 rules:
   - "RULE-SET,Home,🏠 Home"
+  - "RULE-SET,LYHome,🏠 LYHome"
   - "RULE-SET,LocalAreaNetwork,🎯 全球直连"
   - "RULE-SET,UnBan,🎯 全球直连"
   - "RULE-SET,BanAD,🛑 广告拦截"
