@@ -7,7 +7,7 @@ proxy-groups:
     tolerance: 50
   - name: 🏠 LYHome
     include-all: true
-    filter: (?i)LYJ
+    filter: (?i)LYJ|直连|DIRECT
     type: url-test
     interval: 300
     tolerance: 50
