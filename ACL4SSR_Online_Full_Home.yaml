@@ -20,6 +20,7 @@ proxy-groups:
   - name: 🚀 手动切换
     include-all: true
     type: select
+    exclude-filter: "Home|LYJ"
   - name: ♻️ 自动选择
     type: url-test
     include-all: true
