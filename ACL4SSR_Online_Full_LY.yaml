@@ -478,13 +478,6 @@ rule-providers:
     interval: 86400
     format: text
     type: http
-  Home:
-    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/Home.list
-    path: ./ruleset/Home.list
-    behavior: classical
-    interval: 86400
-    format: text
-    type: http
   LYHome:
     url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LYJ.list
     path: ./ruleset/LYJHome.list
