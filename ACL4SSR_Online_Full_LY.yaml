@@ -485,6 +485,14 @@ rule-providers:
     interval: 86400
     format: text
     type: http
+  costomHome:
+    url: https://raw.githubusercontent.com/518512/Config/refs/heads/main/costom.list
+    path: ./ruleset/LYJHome.list
+    behavior: classical
+    interval: 86400
+    format: text
+    type: http
+    
 
 rules:
   - "RULE-SET,LYHome,🏠 LYHome"
@@ -514,6 +522,7 @@ rules:
   - "RULE-SET,Bilibili,📺 哔哩哔哩"
   - "RULE-SET,ChinaMedia,🌏 国内媒体"
   - "RULE-SET,ProxyMedia,🌍 国外媒体"
+  - "RULE-SET,costomHome,🌍 国外媒体"
   - "RULE-SET,ProxyGFWlist,🚀 节点选择"
   - "RULE-SET,ChinaDomain,🎯 全球直连"
   - "RULE-SET,ChinaCompanyIp,🎯 全球直连"
