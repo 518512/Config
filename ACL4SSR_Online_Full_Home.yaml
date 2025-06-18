@@ -30,6 +30,9 @@ proxy-groups:
   - name: 🚀 手动切换
     include-all: true
     type: select
+  - name: 🛸 超大流量
+    include-all: true
+    type: select
     exclude-filter: "Home|LYJ"
   - name: ♻️ 自动选择
     type: url-test
@@ -40,6 +43,8 @@ proxy-groups:
   - name: 📲 电报消息
     type: select
     proxies:
+      - 🚀 手动切换
+      - 🛸 超大流量
       - 🚀 节点选择
       - ♻️ 自动选择
       - 🇸🇬 狮城节点
@@ -48,7 +53,6 @@ proxy-groups:
       - 🇯🇵 日本节点
       - 🇺🇲 美国节点
       - 🇰🇷 韩国节点
-      - 🚀 手动切换
       - DIRECT
   - name: 💬 OpenAi
     type: select
