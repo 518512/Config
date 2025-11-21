@@ -15,6 +15,14 @@ proxy-groups:
       - DIRECT
     interval: 300
     tolerance: 50
+  - name: 🏠 LYHome2
+    include-all: true
+    filter: (?i)LYJ|LY
+    type: select
+    proxies:
+      - DIRECT
+    interval: 300
+    tolerance: 50
   - name: 🚀 节点选择
     type: select
     proxies:
