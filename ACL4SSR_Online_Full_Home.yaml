@@ -512,6 +512,13 @@ rule-providers:
     interval: 86400
     format: text
     type: http
+  LYHome2:
+    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LYJ-2.list
+    path: ./ruleset/LYJHome2.list
+    behavior: classical
+    interval: 86400
+    format: text
+    type: http
   Gemini:
     url: https://github.com/blackmatrix7/ios_rule_script/raw/refs/heads/master/rule/Clash/Gemini/Gemini.list
     path: ./ruleset/Gemini.list
