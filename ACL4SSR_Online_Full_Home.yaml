@@ -530,6 +530,7 @@ rule-providers:
 rules:
   - "RULE-SET,Home,🏠 Home"
   - "RULE-SET,LYHome,🏠 LYHome"
+  - "RULE-SET,LYHome2,🏠 LYHome2"
   - "RULE-SET,LocalAreaNetwork,🎯 全球直连"
   - "RULE-SET,UnBan,🎯 全球直连"
   - "RULE-SET,BanAD,🛑 广告拦截"
