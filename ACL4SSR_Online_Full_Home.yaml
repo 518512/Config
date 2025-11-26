@@ -23,7 +23,7 @@ proxy-groups:
       - DIRECT
     interval: 300
     tolerance: 50
- - name: 🏠 LY3865U
+  - name: 🏠 LY3865U
     include-all: true
     filter: (?i)LYJ|LY
     type: select
