@@ -15,7 +15,15 @@ proxy-groups:
       - DIRECT
     interval: 300
     tolerance: 50
-  - name: 🏠 LYHome2
+  - name: 🏠 LYJ4125
+    include-all: true
+    filter: (?i)LYJ|LY
+    type: select
+    proxies:
+      - DIRECT
+    interval: 300
+    tolerance: 50
+ - name: 🏠 LY3865U
     include-all: true
     filter: (?i)LYJ|LY
     type: select
@@ -512,9 +520,16 @@ rule-providers:
     interval: 86400
     format: text
     type: http
-  LYHome2:
-    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LYJ-2.list
-    path: ./ruleset/LYJHome2.list
+  LYJ4125:
+    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LYJ4125.list
+    path: ./ruleset/LYJ4125.list
+    behavior: classical
+    interval: 86400
+    format: text
+    type: http
+  LY3865U:
+    url: https://raw.githubusercontent.com/518512/518512/master/Meta/config/LY3865U.list
+    path: ./ruleset/LY3865U.list
     behavior: classical
     interval: 86400
     format: text
@@ -530,7 +545,8 @@ rule-providers:
 rules:
   - "RULE-SET,Home,🏠 Home"
   - "RULE-SET,LYHome,🏠 LYHome"
-  - "RULE-SET,LYHome2,🏠 LYHome2"
+  - "RULE-SET,LYJ4125,🏠 LYJ4125"
+  - "RULE-SET,LY3865U,🏠 LY3865U"
   - "RULE-SET,LocalAreaNetwork,🎯 全球直连"
   - "RULE-SET,UnBan,🎯 全球直连"
   - "RULE-SET,BanAD,🛑 广告拦截"
