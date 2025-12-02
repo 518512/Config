@@ -2,7 +2,7 @@ proxy-groups:
   - name: 🔯 全球故转
     type: fallback
     include-all: true
-    filter: "^((?!(中继|Relay|回程|游戏|专线|过期|剩余|流量|测试)).)*$"
+    filter: "^((?!(中继|Relay|回程|游戏|专线|过期|剩余|流量|测试|Home|LY)).)*$"
     url: https://cp.cloudflare.com/generate_204
     interval: 180
     tolerance: 50
@@ -19,6 +19,108 @@ proxy-groups:
     interval: 300
     tolerance: 50
 
+  # 你原来就写好的7个常用组
+  - name: 💬 即时通讯
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🌐 社交媒体
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 📹 YouTube
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 Netflix
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🤖 ChatGPT
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🍎 苹果服务
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: Ⓜ️ 微软服务
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+
+  # 下面是之前缺失、现在全部补全的组（共21个）
+  - name: 📞 Talkatone
+    type: select
+    proxies: [💬 即时通讯,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 💾 OneDrive
+    type: select
+    proxies: [Ⓜ️ 微软服务,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🤖 Copilot
+    type: select
+    proxies: [Ⓜ️ 微软服务,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🤖 AI服务
+    type: select
+    proxies: [🤖 ChatGPT,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🚀 GitHub
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🚀 测速工具
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🎮 Steam
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 AppleTV+
+    type: select
+    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 📢 谷歌FCM
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🇬 谷歌服务
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎶 TikTok
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 DisneyPlus
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 HBO
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 PrimeVideo
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎥 Emby
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🎻 Spotify
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 📺 Bahamut
+    type: select
+    proxies: [🇹🇼 台湾节点,🚀 手动选择,🎯 全球直连]
+  - name: 🎮 游戏平台
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: 🌎 国外媒体
+    type: select
+    proxies:  [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,♻️ 自动选择,🎯 全球直连]
+  - name: ⏬ PT站点
+    type: select
+    proxies: [🎯 全球直连,🚀 手动选择,♻️ 自动选择]
+  - name: 💳 PayPal
+    type: select
+    proxies: [🎯 全球直连,🚀 手动选择,🇺🇸 美国节点]
+  - name: 🛒 国外电商
+    type: select
+    proxies:  [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+  - name: 🎯 全球直连
+    type: select
+    proxies: [DIRECT]
+
+  - name: 🐟 漏网之鱼
+    type: select
+    proxies: [🚀 手动选择, 🎯 全球直连]
+
+  - name: 🔀 非标端口
+    type: select
+    proxies: [🎯 全球直连, 🚀 手动选择]
+  
   - name: 🇭🇰 香港节点
     type: url-test
     include-all: true
@@ -74,109 +176,6 @@ proxy-groups:
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
-
-  - name: 🎯 全球直连
-    type: select
-    proxies: [DIRECT]
-
-  - name: 🔀 非标端口
-    type: select
-    proxies: [🎯 全球直连, 🚀 手动选择]
-
-  - name: 🐟 漏网之鱼
-    type: select
-    proxies: [🚀 手动选择, 🎯 全球直连]
-
-  # 你原来就写好的7个常用组
-  - name: 💬 即时通讯
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
-  - name: 🌐 社交媒体
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
-  - name: 📹 YouTube
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🚀 手动选择,♻️ 自动选择]
-  - name: 🎥 Netflix
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🚀 手动选择,♻️ 自动选择]
-  - name: 🤖 ChatGPT
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🚀 手动选择,♻️ 自动选择]
-  - name: 🍎 苹果服务
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
-  - name: Ⓜ️ 微软服务
-    type: select
-    proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
-
-  # 下面是之前缺失、现在全部补全的组（共21个）
-  - name: 📞 Talkatone
-    type: select
-    proxies: [💬 即时通讯,🚀 手动选择,🎯 全球直连]
-  - name: 💾 OneDrive
-    type: select
-    proxies: [Ⓜ️ 微软服务,🚀 手动选择,🎯 全球直连]
-  - name: 🤖 Copilot
-    type: select
-    proxies: [Ⓜ️ 微软服务,🤖 ChatGPT,🚀 手动选择]
-  - name: 🤖 AI服务
-    type: select
-    proxies: [🤖 ChatGPT,🚀 手动选择]
-  - name: 🚀 GitHub
-    type: select
-    proxies: [🚀 手动选择,♻️ 自动选择]
-  - name: 🚀 测速工具
-    type: select
-    proxies: [🚀 手动选择,🎯 全球直连]
-  - name: 🎮 Steam
-    type: select
-    proxies: [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点]
-  - name: 🎥 AppleTV+
-    type: select
-    proxies: [🍎 苹果服务,🚀 手动选择]
-  - name: 📢 谷歌FCM
-    type: select
-    proxies: [🇬 谷歌服务,🚀 手动选择,🎯 全球直连]
-  - name: 🇬 谷歌服务
-    type: select
-    proxies: [🚀 手动选择,🇺🇸 美国节点,🇸🇬 新加坡节点]
-  - name: 🎶 TikTok
-    type: select
-    proxies: [🚀 手动选择,🇸🇬 新加坡节点,🇭🇰 香港节点]
-  - name: 🎥 DisneyPlus
-    type: select
-    proxies: [🎥 Netflix,🚀 手动选择]
-  - name: 🎥 HBO
-    type: select
-    proxies: [🎥 Netflix,🚀 手动选择]
-  - name: 🎥 PrimeVideo
-    type: select
-    proxies: [🎥 Netflix,🚀 手动选择]
-  - name: 🎥 Emby
-    type: select
-    proxies: [🎥 Netflix,🚀 手动选择]
-  - name: 🎻 Spotify
-    type: select
-    proxies: [🚀 手动选择,🇭🇰 香港节点,🇸🇬 新加坡节点]
-  - name: 📺 Bahamut
-    type: select
-    proxies: [🇹🇼 台湾节点,🚀 手动选择,🎯 全球直连]
-  - name: 🎮 游戏平台
-    type: select
-    proxies: [🚀 手动选择,🇺🇸 美国节点,🇭🇰 香港节点]
-  - name: 🌎 国外媒体
-    type: select
-    proxies: [🚀 手动选择,🇭🇰 香港节点,🇺🇸 美国节点,🇸🇬 新加坡节点]
-  - name: ⏬ PT站点
-    type: select
-    proxies: [🚀 手动选择,♻️ 自动选择]
-  - name: 💳 PayPal
-    type: select
-    proxies: [🚀 手动选择,🇺🇸 美国节点]
-  - name: 🛒 国外电商
-    type: select
-    proxies: [🚀 手动选择,🇺🇸 美国节点,🇸🇬 新加坡节点]
 
 # 下面完全不动，和你原来一模一样
 rule-providers:
