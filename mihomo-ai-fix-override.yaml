@@ -1,0 +1,112 @@
+# =====================================================
+# 2025 终极纯净覆写（零干扰版）
+# 只改组 + 只加规则，啥都不覆盖
+# 适用于 Sub-Store → 脚本操作 → 覆写配置
+# =====================================================
+
+mixin:
+  prepend-proxy-groups:
+    # 保命神器
+    - name: 🔯 全球故转
+      type: fallback
+      include-all: true
+      filter: "^((?!(中继|Relay|回程|游戏|专线|过期|剩余|流量|测试)).)*$"
+      url: https://cp.cloudflare.com/generate_204
+      interval: 180
+      tolerance: 50
+      lazy: true
+
+    # 主组
+    - name: 🚀 手动选择
+      type: select
+      proxies: [🔯 全球故转, ♻️ 自动选择, 🇭🇰 香港节点, 🇺🇸 美国节点, 🇯🇵 日本节点, 🇸🇬 新加坡节点, 🇹🇼 台湾节点, 🇰🇷 韩国节点, 🏠 家宽节点, 🌐 其他地区]
+
+    - name: ♻️ 自动选择
+      type: url-test
+      include-all: true
+      url: https://cp.cloudflare.com/generate_204
+      interval: 300
+      tolerance: 50
+
+    # 地区自动组（常用正则）
+    - name: 🇭🇰 香港节点   ; type: url-test ; filter: "(?i)(港|HK|Hong\\s*Kong|hongkong|深港)"         ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🇺🇸 美国节点   ; type: url-test ; filter: "(?i)(美|US|United\\s*States|洛杉矶|硅谷|达拉斯|芝加哥)" ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🇯🇵 日本节点   ; type: url-test ; filter: "(?i)(日本|JP|Tokyo|Osaka|川日|深日)"               ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🇸🇬 新加坡节点 ; type: url-test ; filter: "(?i)(新加坡|SG|Singapore|狮城)"                 ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🇹🇼 台湾节点   ; type: url-test ; filter: "(?i)(台|TW|Taiwan|台灣|臺灣|新北|彰化)"           ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🇰🇷 韩国节点   ; type: url-test ; filter: "(?i)(KR|Korea|KOR|首尔|韩|韓)"                 ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🏠 家宽节点    ; type: url-test ; filter: "(?i)(家宽|住宅|家庭宽带)"                     ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+    - name: 🌐 其他地区    ; type: url-test ; url: https://cp.cloudflare.com/generate_204 ; interval: 300 ; tolerance: 50
+
+    # 必备三组
+    - name: 🎯 全球直连 ; type: select ; proxies: [DIRECT]
+    - name: 🔀 非标端口 ; type: select ; proxies: [🎯 全球直连, 🚀 手动选择]
+    - name: 🐟 漏网之鱼 ; type: select ; proxies: [🚀 手动选择, 🎯 全球直连]
+
+    # 功能组（全保留，可自行删减）
+    - name: 💬 即时通讯   ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+    - name: 🌐 社交媒体   ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🇹🇼 台湾节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+    - name: 📹 YouTube    ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择]
+    - name: 🎥 Netflix    ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择]
+    - name: 🤖 ChatGPT    ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择]
+    - name: 🍎 苹果服务   ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+    - name: Ⓜ️ 微软服务   ; type: select ; proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+    # 其余功能组同理继续粘贴即可（ChatGPT、Disney、Spotify、Steam…）
+
+  # 远程规则集（Aethersailor 最新）
+  rule-providers:
+    Custom_Direct_Classical: { type: http, behavior: classical, url: "https://testingcf.jsdelivr.net/gh/Aethersailor/Custom_OpenClash_Rules@main/rule/Custom_Direct_Classical.yaml", path: ./ruleset/Custom_Direct_Classical.yaml, interval: 86400 }
+    Custom_Proxy_Classical:  { type: http, behavior: classical, url: "https://testingcf.jsdelivr.net/gh/Aethersailor/Custom_OpenClash_Rules@main/rule/Custom_Proxy_Classical.yaml",  path: ./ruleset/Custom_Proxy_Classical.yaml,  interval: 86400 }
+    Steam_CDN_Classical:     { type: http, behavior: classical, url: "https://testingcf.jsdelivr.net/gh/Aethersailor/Custom_OpenClash_Rules@main/rule/Steam_CDN_Classical.yaml",     path: ./ruleset/Steam_CDN_Classical.yaml,     interval: 86400 }
+    Custom_Port_Direct:      { type: http, behavior: classical, url: "https://testingcf.jsdelivr.net/gh/Aethersailor/Custom_OpenClash_Rules@main/rule/Custom_Port_Direct.yaml",      path: ./ruleset/Custom_Port_Direct.yaml,      interval: 86400 }
+
+  # 最终规则顺序（完全照搬原版）
+  rules:
+    - RULE-SET,Custom_Port_Direct,🔀 非标端口
+    - GEOSITE,private,🎯 全球直连
+    - GEOIP,private,🎯 全球直连,no-resolve
+    - RULE-SET,Custom_Direct_Classical,🎯 全球直连
+    - RULE-SET,Custom_Proxy_Classical,🚀 手动选择
+    - GEOSITE,google-cn,🎯 全球直连
+    - GEOSITE,category-games@cn,🎯 全球直连
+    - RULE-SET,Steam_CDN_Classical,🎯 全球直连
+    - GEOSITE,category-game-platforms-download,🎯 全球直连
+    - GEOSITE,category-public-tracker,🎯 全球直连
+    - GEOSITE,category-communication,💬 即时通讯
+    - GEOSITE,category-social-media-!cn,🌐 社交媒体
+    - GEOSITE,talkatone,📞 Talkatone
+    - GEOSITE,openai,🤖 ChatGPT
+    - GEOSITE,onedrive,💾 OneDrive
+    - GEOSITE,bing,🤖 Copilot
+    - GEOSITE,category-ai-!cn,🤖 AI服务
+    - GEOSITE,github,🚀 GitHub
+    - GEOSITE,category-speedtest,🚀 测速工具
+    - GEOSITE,steam,🎮 Steam
+    - GEOSITE,youtube,📹 YouTube
+    - GEOSITE,apple-tvplus,🎥 AppleTV+
+    - GEOSITE,apple,🍎 苹果服务
+    - GEOSITE,microsoft,Ⓜ️ 微软服务
+    - GEOSITE,googlefcm,📢 谷歌FCM
+    - GEOSITE,google,🇬 谷歌服务
+    - GEOSITE,tiktok,🎶 TikTok
+    - GEOSITE,netflix,🎥 Netflix
+    - GEOSITE,disney,🎥 DisneyPlus
+    - GEOSITE,hbo,🎥 HBO
+    - GEOSITE,primevideo,🎥 PrimeVideo
+    - GEOSITE,category-emby,🎥 Emby
+    - GEOSITE,spotify,🎻 Spotify
+    - GEOSITE,bahamut,📺 Bahamut
+    - GEOSITE,category-games,🎮 游戏平台
+    - GEOSITE,category-entertainment,🌎 国外媒体
+    - GEOSITE,category-pt,⏬ PT站点
+    - GEOSITE,paypal,💳 PayPal
+    - GEOSITE,category-ecommerce,🛒 国外电商
+    - GEOSITE,gfw,🚀 手动选择
+    - GEOIP,telegram,💬 即时通讯,no-resolve
+    - GEOIP,twitter,🌐 社交媒体,no-resolve
+    - GEOIP,facebook,🌐 社交媒体,no-resolve
+    - GEOIP,google,🇬 谷歌服务,no-resolve
+    - GEOIP,netflix,🎥 Netflix,no-resolve
+    - GEOSITE,cn,🎯 全球直连
+    - GEOIP,cn,🎯 全球直连,no-resolve
+    - MATCH,🐟 漏网之鱼
