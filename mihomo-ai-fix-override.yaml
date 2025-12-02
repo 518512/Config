@@ -127,6 +127,10 @@ proxy-groups:
   - name: Ⓜ️ 微软服务
     type: select
     proxies: [🇭🇰 香港节点,🇺🇸 美国节点,🇯🇵 日本节点,🇸🇬 新加坡节点,🏠 家宽节点,🚀 手动选择,♻️ 自动选择,🎯 全球直连]
+    
+  - name: 📞 Talkatone
+    type: select
+    proxies: [🚀 手动选择, ♻️ 自动选择, 🎯 全球直连]
 
 # 如果你后面还有其他功能组，直接继续 - name: ... 粘下去就行
 
