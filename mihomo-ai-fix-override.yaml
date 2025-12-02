@@ -1,3 +1,6 @@
+# 原地址：https://linux.do/t/topic/1052124/4 #Introl
+# 规则源自：https://github.com/Aethersailor/Custom_OpenClash_Rules
+# 修改者：https://grok.com/
 proxy-groups:
   - name: 🔯 全球故转
     type: fallback
