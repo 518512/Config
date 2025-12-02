@@ -5,7 +5,7 @@
 # =====================================================
 
 mixin:
-  prepend-proxy-groups:
+    proxy-groups:
     # 保命神器
     - name: 🔯 全球故转
       type: fallback
