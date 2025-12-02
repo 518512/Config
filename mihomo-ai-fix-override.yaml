@@ -66,18 +66,11 @@ proxy-groups:
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
-
-  - name: 🏠 家宽节点
-    type: url-test
-    include-all: true
-    filter: "(?i)(家宽|住宅|家庭宽带)"
-    url: https://cp.cloudflare.com/generate_204
-    interval: 300
-    tolerance: 50
-
+    
   - name: 🌐 其他地区
     type: url-test
     include-all: true
+    exclude-filter: "(?i)(港|HK|Hong|深港|美|US|United|洛杉矶|硅谷|达拉斯|芝加哥|日本|JP|Tokyo|Osaka|川日|深日|新加|SG|Singapore|狮城|台|TW|Taiwan|台灣|臺灣|新北|彰化|韩|KR|Korea|首尔)"
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
