@@ -1,0 +1,18 @@
+# Apple Music / iTunes 直连规则（推荐在中国大陆使用 CDN 节点）
+# 适用于 mihomo rule-providers（behavior: classical）
+
+# 域名后缀匹配（推荐，覆盖最全）
+DOMAIN-SUFFIX,itunes.apple.com
+DOMAIN-SUFFIX,music.apple.com
+
+# 精确域名匹配（补充你列出的具体节点）
+DOMAIN,init.itunes.apple.com
+DOMAIN,amp-api.music.apple.com
+DOMAIN,mvod.itunes.apple.com
+DOMAIN,play.itunes.apple.com
+DOMAIN,aod.itunes.apple.com
+DOMAIN,client-api.itunes.apple.com
+DOMAIN,se2.itunes.apple.com
+DOMAIN,xp.apple.com
+DOMAIN,librarydaap.itunes.apple.com
+DOMAIN,sync.itunes.apple.com
