@@ -318,7 +318,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """清理镜像请求：先 Dry-run 预检展示，等待确认"""
+    """清理镜像请求：先扫描未使用的悬空镜像展示，等待确认"""
     if not await check_permission(update):
         return
 
@@ -326,13 +326,21 @@ async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text("🔍 正在扫描未使用的镜像...")
 
     try:
+        # 获取所有悬空 (dangling) 镜像，兼容所有 Docker 版本
         proc = await asyncio.create_subprocess_exec(
-            "docker", "image", "prune", "-a", "--dry-run",
+            "docker", "images", "-f", "dangling=true",
+            "--format", "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT
         )
         stdout, _ = await proc.communicate()
-        dry_output = stdout.decode('utf-8', errors='replace')
+        dry_output = stdout.decode('utf-8', errors='replace').strip()
+
+        # 如果没有悬空镜像，直接提示
+        if not dry_output or len(dry_output.splitlines()) <= 1:
+            await message.reply_text("✨ 当前没有需要清理的无用 (dangling) 镜像！")
+            return
+
     except Exception as e:
         dry_output = str(e)
 
@@ -344,7 +352,7 @@ async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     safe_dry_output = html.escape(dry_output[-3000:])
     await message.reply_text(
-        f"将删除以下未使用镜像：\n<code>{safe_dry_output}</code>\n\n确认删除吗？",
+        f"<b>将清理以下无用镜像 (dangling images)：</b>\n<code>{safe_dry_output}</code>\n\n确认清理吗？",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
