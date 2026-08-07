@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/lmdg   # 推荐小写，统一处理
+  IMAGE_NAME: ${{ github.repository }}/ldmg   # 推荐小写，统一处理
 
 jobs:
   build-and-push:
