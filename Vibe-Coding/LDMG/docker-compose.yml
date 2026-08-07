@@ -1,7 +1,7 @@
 services:
-  docker-upgrade-bot:
-    build: .
-    container_name: docker-upgrade-bot
+  LDMG:
+    image: ghcr.io/518512/config/ldmg:main
+    container_name: LDMG
     restart: unless-stopped
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
@@ -10,5 +10,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # 你的 compose 文件所在根目录（非常重要）
-      - /mnt/data1/docker:/mnt/data1/docker
-    # 如果需要访问其他路径，继续添加
+      - /docker:/mnt/data1/docker
+      # /mnt/data1/docker为，docker compose容器所在路径，请按实填写
+      # 如果需要访问其他路径，继续添加。- 未测试
