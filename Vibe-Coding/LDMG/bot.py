@@ -119,6 +119,7 @@ def get_user_identifier(update: Update) -> str:
     username = f"@{user.username}" if user.username else user.first_name
     return f"{user.id} ({username})"
 
+
 # ==================== 全局错误处理器-网络波动 ====================
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """全局异常捕获：静默处理常见的网络波动，避免长堆栈刷屏"""
@@ -129,7 +130,8 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
         return
 
     logger.error("❌ 未捕获的系统异常:", exc_info=context.error)
-    
+
+
 # ==================== 核心：获取 Compose 项目 ====================
 def _get_compose_projects_sync() -> List[Dict]:
     """底层同步函数：扫描系统中的所有 Compose 项目"""
@@ -315,6 +317,8 @@ async def run_command_with_feedback(
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_permission(update):
         return
+    user_str = get_user_identifier(update)
+    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 执行了 /start 指令")
     await cmd_list(update, context)
 
 
@@ -322,6 +326,12 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """显示项目面板和交互菜单"""
     if not await check_permission(update):
         return
+
+    user_str = get_user_identifier(update)
+    if update.callback_query:
+        logger.info(f"🔄 [操作审计] 用户 [{user_str}] 点击了 [刷新列表] 按钮")
+    else:
+        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 执行了 /list 指令")
 
     projects = await get_compose_projects()
     text = "📋 <b>Docker Compose 升级助手 - TGBOT版</b>\n\n"
@@ -377,6 +387,9 @@ async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_permission(update):
         return
 
+    user_str = get_user_identifier(update)
+    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 发起了镜像清理请求")
+
     message = update.effective_message
     await message.reply_text("🔍 正在扫描未使用的镜像...")
 
@@ -424,7 +437,7 @@ async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
     async with lock:
-        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 开始执行无用镜像清理...")
+        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 确认并开始执行无用镜像清理...")
         await query.edit_message_text("🗑 正在删除未使用镜像...")
 
         success = await run_command_with_feedback(
@@ -580,6 +593,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data
+    user_str = get_user_identifier(update)
 
     # 1. 刷新列表
     if data == "refresh":
@@ -596,6 +610,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 4. 取消操作
     elif data == "cancel":
+        logger.info(f"🚫 [操作审计] 用户 [{user_str}] 点击了 [取消] 按钮")
         await query.answer("已取消")
         await query.edit_message_text("❌ 已取消操作")
 
@@ -603,6 +618,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("upgrade:"):
         await query.answer()
         p_name = data.split(":", 1)[1]
+        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 点击了 [升级 {p_name}] 按钮（待确认）")
         projects = await get_compose_projects()
         target_p = next((p for p in projects if p["name"] == p_name), None)
 
@@ -631,6 +647,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 7. 升级全部项目：触发二次确认面板
     elif data == "upgrade_all":
         await query.answer()
+        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 点击了 [升级全部] 按钮（待确认）")
         projects = await get_compose_projects()
         keyboard = [
             [
@@ -654,11 +671,14 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_permission(update):
         return
 
+    user_str = get_user_identifier(update)
+
     if not context.args:
         await update.message.reply_text("用法: /upgrade 01  或  /upgrade all")
         return
 
     arg = context.args[0].lower()
+    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 执行了指令: /upgrade {arg}")
 
     if arg in ("all", "a"):
         keyboard = [
@@ -725,7 +745,7 @@ def main():
     # 注册按钮回调监听
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # 🛠 注册全局错误处理（添加这一行）
+    # 🛠 注册全局错误处理
     app.add_error_handler(global_error_handler)
 
     logger.info("Bot 启动中...")
