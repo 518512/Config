@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 LDMG - Lite Docker Manager Gram
-基于 TG Bot 的Docker Compose 升级助手
+基于 TG Bot 的 Docker Compose 升级助手
 """
 
 import os
@@ -27,7 +27,7 @@ from telegram.ext import (
 # 加载 .env 环境变量
 load_dotenv()
 
-# ==================== 全局配置 & 变量 ====================
+# ==================== 配置 ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ALLOWED_USER_IDS = {
     int(uid.strip())
@@ -35,7 +35,7 @@ ALLOWED_USER_IDS = {
     if uid.strip().isdigit()
 }
 
-# 全局任务锁（延迟初始化，防止事件循环未启动引发异常）
+# 全局任务锁（延迟初始化，防止事件循环未启动引发 RuntimeError）
 _EXEC_LOCK: Optional[asyncio.Lock] = None
 
 def get_exec_lock() -> asyncio.Lock:
@@ -45,15 +45,53 @@ def get_exec_lock() -> asyncio.Lock:
         _EXEC_LOCK = asyncio.Lock()
     return _EXEC_LOCK
 
-# 配置日志输出格式
+# ==================== 日志与安全脱敏配置 ====================
+# 1. 降低第三方 HTTP 库的日志级别，停止轮询 getUpdates 时的刷屏与 Token 输出
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
+# 2. 自定义日志脱敏过滤器（防止任何地方意外打出 Token）
+class TokenMaskFilter(logging.Filter):
+    def __init__(self, token: str):
+        super().__init__()
+        self.token = token
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.token:
+            return True
+            
+        if isinstance(record.msg, str) and self.token in record.msg:
+            record.msg = record.msg.replace(self.token, "[REDACTED_BOT_TOKEN]")
+            
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    arg.replace(self.token, "[REDACTED_BOT_TOKEN]") if isinstance(arg, str) else arg 
+                    for arg in record.args
+                )
+            elif isinstance(record.args, dict):
+                record.args = {
+                    k: (v.replace(self.token, "[REDACTED_BOT_TOKEN]") if isinstance(v, str) else v) 
+                    for k, v in record.args.items()
+                }
+        return True
+
+# 基础日志格式配置
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
+# 为 Root Logger 挂载脱敏过滤器
+if BOT_TOKEN:
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(TokenMaskFilter(BOT_TOKEN))
+    logging.getLogger().addFilter(TokenMaskFilter(BOT_TOKEN))
 
-# ==================== 权限检查 ====================
+
+# ==================== 权限检查与审计辅助 ====================
 def is_allowed(user_id: int) -> bool:
     """检查用户 ID 是否在白名单中"""
     if not ALLOWED_USER_IDS:
@@ -71,6 +109,15 @@ async def check_permission(update: Update) -> bool:
             await update.callback_query.answer("❌ 无权限", show_alert=True)
         return False
     return True
+
+
+def get_user_identifier(update: Update) -> str:
+    """提取操作人的 ID 和 Username，便于审计日志追踪"""
+    user = update.effective_user
+    if not user:
+        return "Unknown User"
+    username = f"@{user.username}" if user.username else user.first_name
+    return f"{user.id} ({username})"
 
 
 # ==================== 核心：获取 Compose 项目 ====================
@@ -197,7 +244,6 @@ async def run_command_with_feedback(
     )
 
     try:
-        # 创建非阻塞子进程
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
@@ -268,7 +314,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     projects = await get_compose_projects()
-    text = "📋 <b>Docker Compose 升级助手</b>\n\n"
+    text = "📋 <b>Docker Compose 升级助手 - TGBOT版</b>\n\n"
     text += "<b>00.</b> 清理未使用镜像\n"
     text += "────────────────\n"
 
@@ -293,7 +339,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"     路径: <code>{safe_dir}</code>\n"
             text += f"     容器: {safe_containers}\n\n"
             
-            # 使用项目名称 (name) 代替数组下标做回调标识，更安全
             keyboard.append([
                 InlineKeyboardButton(
                     f"{num}. 升级 {name}",
@@ -326,7 +371,6 @@ async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text("🔍 正在扫描未使用的镜像...")
 
     try:
-        # 获取所有悬空 (dangling) 镜像，兼容所有 Docker 版本
         proc = await asyncio.create_subprocess_exec(
             "docker", "images", "-f", "dangling=true",
             "--format", "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}",
@@ -336,7 +380,6 @@ async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stdout, _ = await proc.communicate()
         dry_output = stdout.decode('utf-8', errors='replace').strip()
 
-        # 如果没有悬空镜像，直接提示
         if not dry_output or len(dry_output.splitlines()) <= 1:
             await message.reply_text("✨ 当前没有需要清理的无用 (dangling) 镜像！")
             return
@@ -362,13 +405,16 @@ async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """真实执行镜像清理任务"""
     query = update.callback_query
     lock = get_exec_lock()
+    user_str = get_user_identifier(update)
 
     if lock.locked():
+        logger.warning(f"用户 [{user_str}] 尝试清理镜像，但已有任务在运行中")
         await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
         return
 
     await query.answer()
     async with lock:
+        logger.info(f"▶️ [操作审计] 用户 [{user_str}] 开始执行无用镜像清理...")
         await query.edit_message_text("🗑 正在删除未使用镜像...")
 
         success = await run_command_with_feedback(
@@ -376,7 +422,9 @@ async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ["docker", "image", "prune", "-a", "-f"],
             title="清理未使用镜像",
         )
+        
         if success:
+            logger.info(f"✅ [操作审计] 用户 [{user_str}] 的镜像清理任务执行成功")
             try:
                 proc = await asyncio.create_subprocess_exec(
                     "docker", "system", "df",
@@ -391,14 +439,18 @@ async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception:
                 pass
+        else:
+            logger.error(f"❌ [操作审计] 用户 [{user_str}] 的镜像清理任务执行失败")
 
 
 async def do_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE, project_name: str):
     """真实执行单个项目的升级流程"""
     lock = get_exec_lock()
     query = update.callback_query
+    user_str = get_user_identifier(update)
 
     if lock.locked():
+        logger.warning(f"用户 [{user_str}] 尝试升级项目 [{project_name}]，但已有任务在运行中")
         if query:
             await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
         else:
@@ -413,6 +465,7 @@ async def do_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE, project
         target_p = next((p for p in projects if p["name"] == project_name), None)
 
         if not target_p:
+            logger.error(f"❌ [操作审计] 用户 [{user_str}] 尝试升级不存在的项目: {project_name}")
             await update.effective_message.reply_text(f"❌ 未找到项目: <code>{html.escape(project_name)}</code>", parse_mode="HTML")
             return
 
@@ -420,36 +473,47 @@ async def do_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE, project
         safe_name = html.escape(target_p['name'])
         safe_dir = html.escape(target_p['dir'])
 
+        logger.info(f"🚀 [操作审计] 用户 [{user_str}] 开始升级项目 [{project_name}] (路径: {target_p['dir']})")
+
         await message.reply_text(
             f"🚀 开始升级项目 <b>{safe_name}</b>\n路径: <code>{safe_dir}</code>",
             parse_mode="HTML",
         )
 
         # 1. 执行 pull
-        await run_command_with_feedback(
+        pull_ok = await run_command_with_feedback(
             update, context,
             ["docker", "compose", "pull"],
             cwd=target_p["dir"],
             title=f"拉取镜像 - {target_p['name']}",
         )
+        if not pull_ok:
+            logger.error(f"❌ [操作审计] 项目 [{project_name}] 镜像拉取 (pull) 失败，中断后续启动流程")
+            return
 
         # 2. 执行 up -d
-        await run_command_with_feedback(
+        up_ok = await run_command_with_feedback(
             update, context,
             ["docker", "compose", "up", "-d"],
             cwd=target_p["dir"],
             title=f"重建启动 - {target_p['name']}",
         )
 
-        await message.reply_text(f"✅ 项目 <b>{safe_name}</b> 升级完成", parse_mode="HTML")
+        if up_ok:
+            logger.info(f"✅ [操作审计] 项目 [{project_name}] 升级完成并成功重启")
+            await message.reply_text(f"✅ 项目 <b>{safe_name}</b> 升级完成", parse_mode="HTML")
+        else:
+            logger.error(f"❌ [操作审计] 项目 [{project_name}] 重建启动 (up -d) 失败")
 
 
 async def do_upgrade_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """真实执行所有项目的批量升级"""
     lock = get_exec_lock()
     query = update.callback_query
+    user_str = get_user_identifier(update)
 
     if lock.locked():
+        logger.warning(f"用户 [{user_str}] 尝试批量升级全部项目，但已有任务在运行中")
         if query:
             await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
         else:
@@ -462,28 +526,39 @@ async def do_upgrade_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         projects = await get_compose_projects()
         if not projects:
+            logger.info(f"用户 [{user_str}] 触发升级全部，但未检测到可升级项目")
             await update.effective_message.reply_text("没有可升级的项目")
             return
 
+        logger.info(f"🚀 [操作审计] 用户 [{user_str}] 开始批量升级全部 {len(projects)} 个项目...")
         message = update.effective_message
         await message.reply_text(f"🚀 开始升级全部 {len(projects)} 个项目...")
 
         for i, p in enumerate(projects, 1):
-            safe_name = html.escape(p['name'])
+            p_name = p['name']
+            safe_name = html.escape(p_name)
+            
+            logger.info(f"  └─ [{i}/{len(projects)}] 正在升级子项目: {p_name}")
             await message.reply_text(f"[{i}/{len(projects)}] 升级 <b>{safe_name}</b>...", parse_mode="HTML")
-            await run_command_with_feedback(
+            
+            pull_ok = await run_command_with_feedback(
                 update, context,
                 ["docker", "compose", "pull"],
                 cwd=p["dir"],
-                title=f"拉取 - {p['name']}",
+                title=f"拉取 - {p_name}",
             )
-            await run_command_with_feedback(
-                update, context,
-                ["docker", "compose", "up", "-d"],
-                cwd=p["dir"],
-                title=f"启动 - {p['name']}",
-            )
+            
+            if pull_ok:
+                await run_command_with_feedback(
+                    update, context,
+                    ["docker", "compose", "up", "-d"],
+                    cwd=p["dir"],
+                    title=f"启动 - {p_name}",
+                )
+            else:
+                logger.error(f"  └─ 项目 [{p_name}] 拉取失败，跳过重启过程")
 
+        logger.info(f"✅ [操作审计] 用户 [{user_str}] 的批量升级全部项目流程结束")
         await message.reply_text("✅ 全部项目升级完成")
 
 
