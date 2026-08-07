@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LDMG - Lite Docker Mnager Gram
-功能完全对应之前的 Bash 脚本
+LDMG - Lite Docker Manager Gram
+基于 TG Bot 的Docker Compose 升级助手
 """
 
 import os
 import re
+import json
+import time
+import html
+import asyncio
 import subprocess
 import logging
 from typing import List, Dict, Optional
@@ -18,12 +22,12 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
-    filters,
 )
 
+# 加载 .env 环境变量
 load_dotenv()
 
-# ==================== 配置 ====================
+# ==================== 全局配置 & 变量 ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ALLOWED_USER_IDS = {
     int(uid.strip())
@@ -31,7 +35,17 @@ ALLOWED_USER_IDS = {
     if uid.strip().isdigit()
 }
 
-# 日志
+# 全局任务锁（延迟初始化，防止事件循环未启动引发异常）
+_EXEC_LOCK: Optional[asyncio.Lock] = None
+
+def get_exec_lock() -> asyncio.Lock:
+    """获取并发互斥锁（确保在活跃的 Event Loop 中创建）"""
+    global _EXEC_LOCK
+    if _EXEC_LOCK is None:
+        _EXEC_LOCK = asyncio.Lock()
+    return _EXEC_LOCK
+
+# 配置日志输出格式
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -41,12 +55,14 @@ logger = logging.getLogger(__name__)
 
 # ==================== 权限检查 ====================
 def is_allowed(user_id: int) -> bool:
+    """检查用户 ID 是否在白名单中"""
     if not ALLOWED_USER_IDS:
         return False
     return user_id in ALLOWED_USER_IDS
 
 
 async def check_permission(update: Update) -> bool:
+    """拦截器：校验 Telegram 发起者的操作权限"""
     user = update.effective_user
     if not user or not is_allowed(user.id):
         if update.message:
@@ -58,12 +74,12 @@ async def check_permission(update: Update) -> bool:
 
 
 # ==================== 核心：获取 Compose 项目 ====================
-def get_compose_projects() -> List[Dict]:
-    """扫描所有 Compose 项目，返回列表"""
+def _get_compose_projects_sync() -> List[Dict]:
+    """底层同步函数：扫描系统中的所有 Compose 项目"""
     projects = []
     seen_dirs = set()
 
-    # 方法1：docker compose ls -a
+    # 方式 1：使用 docker compose ls -a 获取官方管理列表
     try:
         result = subprocess.run(
             ["docker", "compose", "ls", "-a", "--format", "json"],
@@ -72,9 +88,7 @@ def get_compose_projects() -> List[Dict]:
             timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
-            import json
             data = json.loads(result.stdout)
-            # 兼容单个对象或数组
             if isinstance(data, dict):
                 data = [data]
             for item in data:
@@ -95,9 +109,9 @@ def get_compose_projects() -> List[Dict]:
                         "containers": containers,
                     })
     except Exception as e:
-        logger.warning(f"docker compose ls 失败: {e}")
+        logger.warning(f"docker compose ls 扫描失败: {e}")
 
-    # 方法2：补充标签扫描
+    # 方式 2：使用容器 Label 扫描进行补充，防止漏检
     try:
         result = subprocess.run(
             [
@@ -130,12 +144,18 @@ def get_compose_projects() -> List[Dict]:
     except Exception as e:
         logger.warning(f"标签扫描失败: {e}")
 
-    # 按名称排序
+    # 按照项目名称进行排序
     projects.sort(key=lambda x: x["name"])
     return projects
 
 
+async def get_compose_projects() -> List[Dict]:
+    """异步封装：将阻塞的 subprocess 放到单独线程中运行，避免卡死 Bot"""
+    return await asyncio.to_thread(_get_compose_projects_sync)
+
+
 def get_project_containers(project_name: str) -> str:
+    """获取指定 Compose 项目对应的所有容器名称列表"""
     try:
         result = subprocess.run(
             [
@@ -163,61 +183,79 @@ async def run_command_with_feedback(
     cwd: Optional[str] = None,
     title: str = "执行中",
 ):
-    """执行命令，把关键输出推送到 Telegram"""
+    """
+    流式执行命令并将实时日志推送至 Telegram。
+    包含 HTML 安全转义与 API 请求限频控制（防止 429 报错）。
+    """
     message = update.effective_message
-    status_msg = await message.reply_text(f"⏳ {title}\n<code>{' '.join(cmd)}</code>", parse_mode="HTML")
+    safe_title = html.escape(title)
+    safe_cmd = html.escape(' '.join(cmd))
+    
+    status_msg = await message.reply_text(
+        f"⏳ {safe_title}\n<code>{safe_cmd}</code>", 
+        parse_mode="HTML"
+    )
 
     try:
-        process = subprocess.Popen(
-            cmd,
+        # 创建非阻塞子进程
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
             cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
 
         output_lines = []
-        while True:
-            line = process.stdout.readline()
-            if not line and process.poll() is not None:
-                break
-            if line:
-                line = line.rstrip()
-                output_lines.append(line)
-                # 每积累几行或遇到关键信息就更新一次（避免刷屏）
-                if len(output_lines) % 8 == 0 or any(
-                    k in line.lower() for k in ["pulling", "downloaded", "created", "started", "error", "done"]
-                ):
-                    preview = "\n".join(output_lines[-15:])  # 只显示最近 15 行
-                    try:
-                        await status_msg.edit_text(
-                            f"⏳ {title}\n<code>{preview[-3500:]}</code>",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
+        last_update_time = time.time()
 
-        returncode = process.wait()
-        full_output = "\n".join(output_lines[-30:])  # 最终显示最后 30 行
+        while True:
+            line_bytes = await process.stdout.readline()
+            if not line_bytes:
+                break
+            
+            line = line_bytes.decode('utf-8', errors='replace').rstrip()
+            output_lines.append(line)
+
+            now = time.time()
+            is_key_line = any(
+                k in line.lower() for k in ["pulling", "downloaded", "created", "started", "error", "done"]
+            )
+            # 限制更新频率：行数积攒或关键词触发，且距离上次更新 >= 1.5s
+            if (len(output_lines) % 8 == 0 or is_key_line) and (now - last_update_time >= 1.5):
+                preview = "\n".join(output_lines[-15:])
+                safe_preview = html.escape(preview[-3500:])
+                try:
+                    await status_msg.edit_text(
+                        f"⏳ {safe_title}\n<code>{safe_preview}</code>",
+                        parse_mode="HTML",
+                    )
+                    last_update_time = now
+                except Exception:
+                    pass
+
+        returncode = await process.wait()
+        full_output = "\n".join(output_lines[-30:])
+        safe_full_output = html.escape(full_output[-3500:])
 
         if returncode == 0:
             await status_msg.edit_text(
-                f"✅ {title} 完成\n<code>{full_output[-3500:]}</code>",
+                f"✅ {safe_title} 完成\n<code>{safe_full_output}</code>",
                 parse_mode="HTML",
             )
         else:
             await status_msg.edit_text(
-                f"❌ {title} 失败 (exit {returncode})\n<code>{full_output[-3500:]}</code>",
+                f"❌ {safe_title} 失败 (exit {returncode})\n<code>{safe_full_output}</code>",
                 parse_mode="HTML",
             )
         return returncode == 0
+
     except Exception as e:
-        await status_msg.edit_text(f"❌ 执行出错: {e}")
+        safe_err = html.escape(str(e))
+        await status_msg.edit_text(f"❌ 执行异常: {safe_err}")
         return False
 
 
-# ==================== 命令处理 ====================
+# ==================== 命令与业务处理函数 ====================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_permission(update):
         return
@@ -225,10 +263,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """显示项目面板和交互菜单"""
     if not await check_permission(update):
         return
 
-    projects = get_compose_projects()
+    projects = await get_compose_projects()
     text = "📋 <b>Docker Compose 升级助手</b>\n\n"
     text += "<b>00.</b> 清理未使用镜像\n"
     text += "────────────────\n"
@@ -242,15 +281,23 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         for i, p in enumerate(projects, 1):
             num = f"{i:02d}"
+            name = p["name"]
             status = p["status"]
             status_icon = "🟢" if "running" in status else "🟡"
-            text += f"<b>{num}.</b> {p['name']}  {status_icon} [{status}]\n"
-            text += f"     路径: <code>{p['dir']}</code>\n"
-            text += f"     容器: {p['containers'] or '-'}\n\n"
+            
+            safe_name = html.escape(name)
+            safe_dir = html.escape(p["dir"])
+            safe_containers = html.escape(p["containers"] or "-")
+
+            text += f"<b>{num}.</b> {safe_name}  {status_icon} [{html.escape(status)}]\n"
+            text += f"     路径: <code>{safe_dir}</code>\n"
+            text += f"     容器: {safe_containers}\n\n"
+            
+            # 使用项目名称 (name) 代替数组下标做回调标识，更安全
             keyboard.append([
                 InlineKeyboardButton(
-                    f"{num}. 升级 {p['name']}",
-                    callback_data=f"upgrade:{i-1}"
+                    f"{num}. 升级 {name}",
+                    callback_data=f"upgrade:{name}"
                 )
             ])
 
@@ -271,153 +318,246 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """清理镜像请求：先 Dry-run 预检展示，等待确认"""
     if not await check_permission(update):
         return
 
     message = update.effective_message
     await message.reply_text("🔍 正在扫描未使用的镜像...")
 
-    # 先 dry-run 展示
     try:
-        result = subprocess.run(
-            ["docker", "image", "prune", "-a", "--dry-run"],
-            capture_output=True,
-            text=True,
-            timeout=60,
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "image", "prune", "-a", "--dry-run",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
         )
-        dry_output = result.stdout + result.stderr
+        stdout, _ = await proc.communicate()
+        dry_output = stdout.decode('utf-8', errors='replace')
     except Exception as e:
         dry_output = str(e)
 
     keyboard = [
         [
-            InlineKeyboardButton("✅ 确认删除", callback_data="prune_confirm"),
+            InlineKeyboardButton("✅ 确认清理", callback_data="prune_confirm"),
             InlineKeyboardButton("❌ 取消", callback_data="cancel"),
         ]
     ]
+    safe_dry_output = html.escape(dry_output[-3000:])
     await message.reply_text(
-        f"将删除以下未使用镜像：\n<code>{dry_output[-3000:]}</code>\n\n确认删除吗？",
+        f"将删除以下未使用镜像：\n<code>{safe_dry_output}</code>\n\n确认删除吗？",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
 
 
 async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """真实执行镜像清理任务"""
     query = update.callback_query
+    lock = get_exec_lock()
+
+    if lock.locked():
+        await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
+        return
+
     await query.answer()
-    await query.edit_message_text("🗑 正在删除未使用镜像...")
+    async with lock:
+        await query.edit_message_text("🗑 正在删除未使用镜像...")
 
-    success = await run_command_with_feedback(
-        update, context,
-        ["docker", "image", "prune", "-a", "-f"],
-        title="清理未使用镜像",
-    )
-    if success:
-        # 显示磁盘使用
-        try:
-            df = subprocess.run(
-                ["docker", "system", "df"],
-                capture_output=True, text=True, timeout=15
-            )
-            await update.effective_message.reply_text(
-                f"<b>当前磁盘使用：</b>\n<code>{df.stdout}</code>",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
+        success = await run_command_with_feedback(
+            update, context,
+            ["docker", "image", "prune", "-a", "-f"],
+            title="清理未使用镜像",
+        )
+        if success:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "system", "df",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT
+                )
+                stdout, _ = await proc.communicate()
+                safe_df = html.escape(stdout.decode('utf-8', errors='replace'))
+                await update.effective_message.reply_text(
+                    f"<b>当前磁盘使用情况：</b>\n<code>{safe_df}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
 
-async def do_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int):
-    projects = get_compose_projects()
-    if index < 0 or index >= len(projects):
-        await update.effective_message.reply_text("❌ 无效的项目序号")
+async def do_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE, project_name: str):
+    """真实执行单个项目的升级流程"""
+    lock = get_exec_lock()
+    query = update.callback_query
+
+    if lock.locked():
+        if query:
+            await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
+        else:
+            await update.effective_message.reply_text("⚠️ 当前已有其他任务在运行中，请稍后再试。")
         return
 
-    p = projects[index]
-    message = update.effective_message
-    await message.reply_text(
-        f"🚀 开始升级项目 <b>{p['name']}</b>\n路径: <code>{p['dir']}</code>",
-        parse_mode="HTML",
-    )
+    if query:
+        await query.answer()
 
-    # pull
-    await run_command_with_feedback(
-        update, context,
-        ["docker", "compose", "pull"],
-        cwd=p["dir"],
-        title=f"拉取镜像 - {p['name']}",
-    )
+    async with lock:
+        projects = await get_compose_projects()
+        target_p = next((p for p in projects if p["name"] == project_name), None)
 
-    # up -d
-    await run_command_with_feedback(
-        update, context,
-        ["docker", "compose", "up", "-d"],
-        cwd=p["dir"],
-        title=f"重建启动 - {p['name']}",
-    )
+        if not target_p:
+            await update.effective_message.reply_text(f"❌ 未找到项目: <code>{html.escape(project_name)}</code>", parse_mode="HTML")
+            return
 
-    await message.reply_text(f"✅ 项目 <b>{p['name']}</b> 升级完成", parse_mode="HTML")
+        message = update.effective_message
+        safe_name = html.escape(target_p['name'])
+        safe_dir = html.escape(target_p['dir'])
 
+        await message.reply_text(
+            f"🚀 开始升级项目 <b>{safe_name}</b>\n路径: <code>{safe_dir}</code>",
+            parse_mode="HTML",
+        )
 
-async def do_upgrade_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    projects = get_compose_projects()
-    if not projects:
-        await update.effective_message.reply_text("没有可升级的项目")
-        return
-
-    message = update.effective_message
-    await message.reply_text(f"🚀 开始升级全部 {len(projects)} 个项目...")
-
-    for i, p in enumerate(projects, 1):
-        await message.reply_text(f"[{i}/{len(projects)}] 升级 <b>{p['name']}</b>...", parse_mode="HTML")
+        # 1. 执行 pull
         await run_command_with_feedback(
             update, context,
             ["docker", "compose", "pull"],
-            cwd=p["dir"],
-            title=f"拉取 - {p['name']}",
+            cwd=target_p["dir"],
+            title=f"拉取镜像 - {target_p['name']}",
         )
+
+        # 2. 执行 up -d
         await run_command_with_feedback(
             update, context,
             ["docker", "compose", "up", "-d"],
-            cwd=p["dir"],
-            title=f"启动 - {p['name']}",
+            cwd=target_p["dir"],
+            title=f"重建启动 - {target_p['name']}",
         )
 
-    await message.reply_text("✅ 全部项目升级完成")
+        await message.reply_text(f"✅ 项目 <b>{safe_name}</b> 升级完成", parse_mode="HTML")
 
 
-# ==================== 回调查询处理 ====================
+async def do_upgrade_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """真实执行所有项目的批量升级"""
+    lock = get_exec_lock()
+    query = update.callback_query
+
+    if lock.locked():
+        if query:
+            await query.answer("⚠️ 当前已有其他任务在运行中，请稍后再试", show_alert=True)
+        else:
+            await update.effective_message.reply_text("⚠️ 当前已有其他任务在运行中，请稍后再试。")
+        return
+
+    if query:
+        await query.answer()
+
+    async with lock:
+        projects = await get_compose_projects()
+        if not projects:
+            await update.effective_message.reply_text("没有可升级的项目")
+            return
+
+        message = update.effective_message
+        await message.reply_text(f"🚀 开始升级全部 {len(projects)} 个项目...")
+
+        for i, p in enumerate(projects, 1):
+            safe_name = html.escape(p['name'])
+            await message.reply_text(f"[{i}/{len(projects)}] 升级 <b>{safe_name}</b>...", parse_mode="HTML")
+            await run_command_with_feedback(
+                update, context,
+                ["docker", "compose", "pull"],
+                cwd=p["dir"],
+                title=f"拉取 - {p['name']}",
+            )
+            await run_command_with_feedback(
+                update, context,
+                ["docker", "compose", "up", "-d"],
+                cwd=p["dir"],
+                title=f"启动 - {p['name']}",
+            )
+
+        await message.reply_text("✅ 全部项目升级完成")
+
+
+# ==================== 回调查询与确认逻辑 ====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理内嵌按钮的点击回调事件"""
     query = update.callback_query
     if not await check_permission(update):
         return
 
     data = query.data
 
+    # 1. 刷新列表
     if data == "refresh":
         await cmd_list(update, context)
+
+    # 2. 清理镜像（弹窗二次确认）
     elif data == "prune":
         await query.answer()
         await cmd_prune(update, context)
+
+    # 3. 确认清理镜像
     elif data == "prune_confirm":
         await do_prune(update, context)
+
+    # 4. 取消操作
     elif data == "cancel":
         await query.answer("已取消")
         await query.edit_message_text("❌ 已取消操作")
-    elif data == "upgrade_all":
-        await query.answer()
-        await do_upgrade_all(update, context)
+
+    # 5. 升级单个项目：触发二次确认面板
     elif data.startswith("upgrade:"):
         await query.answer()
-        try:
-            idx = int(data.split(":")[1])
-            await do_upgrade(update, context, idx)
-        except Exception as e:
-            await query.message.reply_text(f"❌ 错误: {e}")
+        p_name = data.split(":", 1)[1]
+        projects = await get_compose_projects()
+        target_p = next((p for p in projects if p["name"] == p_name), None)
+
+        if target_p:
+            safe_name = html.escape(target_p['name'])
+            safe_dir = html.escape(target_p['dir'])
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ 确认升级", callback_data=f"upgrade_confirm:{p_name}"),
+                    InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+                ]
+            ]
+            await query.edit_message_text(
+                f"🚀 <b>确认升级项目 [{safe_name}]？</b>\n路径: <code>{safe_dir}</code>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+        else:
+            await query.edit_message_text("❌ 该项目不存在或已被移除")
+
+    # 6. 确认升级单个项目：真实开始
+    elif data.startswith("upgrade_confirm:"):
+        p_name = data.split(":", 1)[1]
+        await do_upgrade(update, context, p_name)
+
+    # 7. 升级全部项目：触发二次确认面板
+    elif data == "upgrade_all":
+        await query.answer()
+        projects = await get_compose_projects()
+        keyboard = [
+            [
+                InlineKeyboardButton("🚀 确认升级全部", callback_data="upgrade_all_confirm"),
+                InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"⚠️ <b>确认升级全部项目？</b>\n\n共检测到 <b>{len(projects)}</b> 个项目，升级过程中相关服务将会重启。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+
+    # 8. 确认升级全部项目：真实开始
+    elif data == "upgrade_all_confirm":
+        await do_upgrade_all(update, context)
 
 
 async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """支持 /upgrade 01 或 /upgrade all"""
+    """支持命令行调用：/upgrade 01 或 /upgrade all"""
     if not await check_permission(update):
         return
 
@@ -426,11 +566,21 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     arg = context.args[0].lower()
+
     if arg in ("all", "a"):
-        await do_upgrade_all(update, context)
+        keyboard = [
+            [
+                InlineKeyboardButton("🚀 确认升级全部", callback_data="upgrade_all_confirm"),
+                InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+            ]
+        ]
+        await update.message.reply_text(
+            "⚠️ <b>确认升级全部项目？</b>\n升级过程中相关服务将会重启。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
         return
 
-    # 支持 01 / 1 / 00
     if arg in ("00", "0"):
         await cmd_prune(update, context)
         return
@@ -439,12 +589,31 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         num = int(arg)
         if num < 1:
             raise ValueError
-        await do_upgrade(update, context, num - 1)
+        
+        idx = num - 1
+        projects = await get_compose_projects()
+        if 0 <= idx < len(projects):
+            p = projects[idx]
+            safe_name = html.escape(p['name'])
+            safe_dir = html.escape(p['dir'])
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ 确认升级", callback_data=f"upgrade_confirm:{p['name']}"),
+                    InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+                ]
+            ]
+            await update.message.reply_text(
+                f"🚀 <b>确认升级项目 [{safe_name}]？</b>\n路径: <code>{safe_dir}</code>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text("❌ 无效的项目序号")
     except ValueError:
         await update.message.reply_text("请输入正确的序号，例如 /upgrade 01")
 
 
-# ==================== 主函数 ====================
+# ==================== 主函数入口 ====================
 def main():
     if not BOT_TOKEN:
         logger.error("请设置 BOT_TOKEN 环境变量")
@@ -454,10 +623,13 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # 注册指令监听
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("prune", cmd_prune))
     app.add_handler(CommandHandler("upgrade", cmd_upgrade))
+    
+    # 注册按钮回调监听
     app.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("Bot 启动中...")
