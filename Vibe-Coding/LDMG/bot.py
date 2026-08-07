@@ -119,7 +119,17 @@ def get_user_identifier(update: Update) -> str:
     username = f"@{user.username}" if user.username else user.first_name
     return f"{user.id} ({username})"
 
+# ==================== 全局错误处理器-网络波动 ====================
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """全局异常捕获：静默处理常见的网络波动，避免长堆栈刷屏"""
+    from telegram.error import NetworkError, TimedOut
 
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.warning(f"🌐 遇到临时网络波动 (已自动重连): {context.error}")
+        return
+
+    logger.error("❌ 未捕获的系统异常:", exc_info=context.error)
+    
 # ==================== 核心：获取 Compose 项目 ====================
 def _get_compose_projects_sync() -> List[Dict]:
     """底层同步函数：扫描系统中的所有 Compose 项目"""
@@ -714,6 +724,9 @@ def main():
     
     # 注册按钮回调监听
     app.add_handler(CallbackQueryHandler(button_handler))
+
+    # 🛠 注册全局错误处理（添加这一行）
+    app.add_error_handler(global_error_handler)
 
     logger.info("Bot 启动中...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
