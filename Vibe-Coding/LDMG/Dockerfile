@@ -1,8 +1,6 @@
-FROM docker:27-cli
+FROM python:3.12-slim
 
-# 安装 Python
-RUN apk add --no-cache python3 py3-pip
-
+# 不需要安装 apk 或其他系统工具
 WORKDIR /app
 
 COPY requirements.txt .
