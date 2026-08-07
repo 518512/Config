@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # 安装 Docker CLI（修复 "docker: not found" 问题）
 RUN apt-get update && apt-get install -y \
     docker.io \
+    docker-compose-plugin \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
