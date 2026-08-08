@@ -1,4 +1,4 @@
-LDMG - Lite Docker Manger Gram
+**LDMG** - Lite Docker Manger Gram
 
 - 1、起因最近很多镜像升级速度比较频繁，每次都要进ssh ，进目录， down pull up
 - 2、所以用AI写了个脚本只要运行 ./docker-upgrade.sh
