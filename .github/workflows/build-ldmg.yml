@@ -6,7 +6,7 @@ on:
     paths:
       - 'Vibe-Coding/LDMG/**'
       - '.github/workflows/build-ldmg.yml'
-      - '!Vibe-Coding/LDMG/README.md'
+      - '!Vibe-Coding/LDMG/README*'
   workflow_dispatch:
 
 env:
