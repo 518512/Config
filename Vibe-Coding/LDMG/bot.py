@@ -2,18 +2,19 @@
 # -*- coding: utf-8 -*-
 """
 LDMG - Lite Docker Manager Gram
-基于 TG Bot 的 Docker Compose 升级助手 (完整优化修复版)
+基于 TG Bot 的 Docker Compose 升级助手 (全量修复与美化增强版)
 """
 
 import os
-import re
 import json
 import time
 import html
+import uuid
 import asyncio
 import subprocess
 import logging
-from typing import List, Dict, Optional
+from collections import deque
+from typing import List, Dict, Optional, Any
 
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -35,8 +36,13 @@ ALLOWED_USER_IDS = {
     if uid.strip().isdigit()
 }
 
-# 全局任务锁
+COMMAND_TIMEOUT = 300  # Docker 单个命令超时时间（秒）
+PAGE_SIZE = 6          # 主面板每页展示的项目数量
+
+# 全局任务状态管理
 _EXEC_LOCK: Optional[asyncio.Lock] = None
+_CURRENT_PROCESS: Optional[asyncio.subprocess.Process] = None
+_CANCEL_REQUESTED: bool = False
 
 def get_exec_lock() -> asyncio.Lock:
     """获取并发互斥锁"""
@@ -44,6 +50,31 @@ def get_exec_lock() -> asyncio.Lock:
     if _EXEC_LOCK is None:
         _EXEC_LOCK = asyncio.Lock()
     return _EXEC_LOCK
+
+
+# ==================== Callback Data 内存映射系统 ====================
+# 彻底解决 Telegram 64 字节 callback_data 限制
+_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
+
+def create_cb_data(action: str, payload: Optional[Dict[str, Any]] = None) -> str:
+    """生成短 ID 并存储真实载荷，规避 Telegram 限制"""
+    if payload is None:
+        payload = {}
+    short_id = uuid.uuid4().hex[:8]
+    key = f"{action}:{short_id}"
+    _CALLBACK_STORE[key] = payload
+    
+    # 自动清理过期的映射，防止内存膨胀
+    if len(_CALLBACK_STORE) > 800:
+        for k in list(_CALLBACK_STORE.keys())[:200]:
+            _CALLBACK_STORE.pop(k, None)
+            
+    return key
+
+def get_cb_payload(key: str) -> Optional[Dict[str, Any]]:
+    """根据 short key 获取回调数据"""
+    return _CALLBACK_STORE.get(key)
+
 
 # ==================== 日志与安全脱敏配置 ====================
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -80,9 +111,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 if BOT_TOKEN:
+    mask_filter = TokenMaskFilter(BOT_TOKEN)
     for handler in logging.getLogger().handlers:
-        handler.addFilter(TokenMaskFilter(BOT_TOKEN))
-    logging.getLogger().addFilter(TokenMaskFilter(BOT_TOKEN))
+        handler.addFilter(mask_filter)
 
 
 # ==================== 权限与辅助函数 ====================
@@ -106,6 +137,11 @@ def get_user_identifier(update: Update) -> str:
     username = f"@{user.username}" if user.username else user.first_name
     return f"{user.id} ({username})"
 
+def render_progress_bar(percentage: int, width: int = 8) -> str:
+    """生成自定义进度条图标"""
+    filled = int(round(width * percentage / 100))
+    return "▰" * filled + "▱" * (width - filled)
+
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     from telegram.error import NetworkError, TimedOut, BadRequest
     if isinstance(context.error, (NetworkError, TimedOut)):
@@ -113,12 +149,12 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
         return
     if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
         return
-    logger.error("❌ 未捕获的系统异常:", exc_info=context.error)
+    logger.error("❌ 未捕获的系统异常:", exc_info=True)
 
 
-# ==================== Docker Compose 扫描与服务获取 ====================
+# ==================== Docker Compose 扫描与状态 ====================
 def get_project_services(work_dir: str) -> List[str]:
-    """通过 docker compose config --services 获取项目里定义的准确 service 名称"""
+    """获取项目的服务定义"""
     try:
         result = subprocess.run(
             ["docker", "compose", "config", "--services"],
@@ -135,7 +171,7 @@ def get_project_services(work_dir: str) -> List[str]:
 
 def _get_compose_projects_sync() -> List[Dict]:
     projects = []
-    seen_dirs = set()
+    seen_keys = set()
 
     try:
         result = subprocess.run(
@@ -145,9 +181,19 @@ def _get_compose_projects_sync() -> List[Dict]:
             timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout)
-            if isinstance(data, dict):
-                data = [data]
+            try:
+                data = json.loads(result.stdout)
+                if isinstance(data, dict):
+                    data = [data]
+            except json.JSONDecodeError:
+                data = []
+                for line in result.stdout.strip().splitlines():
+                    if line.strip():
+                        try:
+                            data.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+
             for item in data:
                 name = item.get("Name", "")
                 status = item.get("Status", "")
@@ -156,8 +202,10 @@ def _get_compose_projects_sync() -> List[Dict]:
                     continue
                 first_file = config_files.split(",")[0].strip() if config_files else ""
                 work_dir = os.path.dirname(first_file) if first_file else ""
-                if work_dir and os.path.isdir(work_dir) and work_dir not in seen_dirs:
-                    seen_dirs.add(work_dir)
+                
+                unique_key = f"{name}:{work_dir}"
+                if work_dir and os.path.isdir(work_dir) and unique_key not in seen_keys:
+                    seen_keys.add(unique_key)
                     services = get_project_services(work_dir)
                     projects.append({
                         "name": name,
@@ -168,38 +216,6 @@ def _get_compose_projects_sync() -> List[Dict]:
     except Exception as e:
         logger.warning(f"docker compose ls 扫描失败: {e}")
 
-    try:
-        result = subprocess.run(
-            [
-                "docker", "ps", "-a",
-                "--filter", "label=com.docker.compose.project",
-                "--format",
-                '{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}',
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().splitlines():
-                if not line.strip():
-                    continue
-                parts = line.split("\t")
-                if len(parts) < 2:
-                    continue
-                name, work_dir = parts[0].strip(), parts[1].strip()
-                if work_dir and os.path.isdir(work_dir) and work_dir not in seen_dirs:
-                    seen_dirs.add(work_dir)
-                    services = get_project_services(work_dir)
-                    projects.append({
-                        "name": name,
-                        "dir": work_dir,
-                        "status": "running",
-                        "services": services,
-                    })
-    except Exception as e:
-        logger.warning(f"标签扫描失败: {e}")
-
     projects.sort(key=lambda x: x["name"])
     return projects
 
@@ -207,22 +223,37 @@ async def get_compose_projects() -> List[Dict]:
     return await asyncio.to_thread(_get_compose_projects_sync)
 
 
-# ==================== 执行命令并流式推送日志 ====================
+# ==================== 可视化进度条 & 日志执行引擎 ====================
 async def run_command_with_feedback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     cmd: List[str],
     cwd: Optional[str] = None,
     title: str = "执行中",
-):
+    progress_pct: int = 50,
+) -> bool:
+    global _CURRENT_PROCESS, _CANCEL_REQUESTED
     message = update.effective_message
+    
+    start_time = time.time()
     safe_title = html.escape(title)
     safe_cmd = html.escape(' '.join(cmd))
     
+    cancel_cb = create_cb_data("task_cancel")
+    cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 中断执行", callback_data=cancel_cb)]])
+
+    p_bar = render_progress_bar(progress_pct)
     status_msg = await message.reply_text(
-        f"⏳ <b>{safe_title}</b>\n<code>{safe_cmd}</code>", 
+        f"⚙️ <b>{safe_title}</b> [{p_bar}]\n"
+        f"⏱ <b>已用时：</b>0.0s\n"
+        f"<code>{safe_cmd}</code>",
+        reply_markup=cancel_markup,
         parse_mode="HTML"
     )
+
+    output_lines = deque(maxlen=100)
+    _CURRENT_PROCESS = None
+    _CANCEL_REQUESTED = False
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -231,143 +262,187 @@ async def run_command_with_feedback(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        _CURRENT_PROCESS = process
 
-        output_lines = []
         last_update_time = time.time()
 
-        while True:
-            line_bytes = await process.stdout.readline()
-            if not line_bytes:
-                break
-            
-            line = line_bytes.decode('utf-8', errors='replace').rstrip()
-            output_lines.append(line)
+        async def read_stream():
+            nonlocal last_update_time
+            while True:
+                if _CANCEL_REQUESTED:
+                    process.kill()
+                    break
 
-            now = time.time()
-            is_key_line = any(
-                k in line.lower() for k in ["pulling", "downloaded", "created", "started", "error", "done"]
-            )
-            if (len(output_lines) % 8 == 0 or is_key_line) and (now - last_update_time >= 1.5):
-                preview = "\n".join(output_lines[-15:])
-                safe_preview = html.escape(preview[-3500:])
-                try:
-                    await status_msg.edit_text(
-                        f"⏳ <b>{safe_title}</b>\n<code>{safe_preview}</code>",
-                        parse_mode="HTML",
-                    )
-                    last_update_time = now
-                except Exception:
-                    pass
+                line_bytes = await process.stdout.readline()
+                if not line_bytes:
+                    break
+                
+                line = line_bytes.decode('utf-8', errors='replace').rstrip()
+                output_lines.append(line)
 
+                now = time.time()
+                is_key_line = any(
+                    k in line.lower() for k in ["pulling", "downloaded", "created", "started", "error", "done"]
+                )
+                if (len(output_lines) % 8 == 0 or is_key_line) and (now - last_update_time >= 1.2):
+                    elapsed = round(now - start_time, 1)
+                    preview = "\n".join(list(output_lines)[-12:])
+                    safe_preview = html.escape(preview[-3500:])
+                    try:
+                        await status_msg.edit_text(
+                            f"⚙️ <b>{safe_title}</b> [{p_bar}]\n"
+                            f"⏱ <b>已用时：</b>{elapsed}s\n"
+                            f"<code>{safe_preview}</code>",
+                            reply_markup=cancel_markup,
+                            parse_mode="HTML",
+                        )
+                        last_update_time = now
+                    except Exception:
+                        pass
+
+        await asyncio.wait_for(read_stream(), timeout=COMMAND_TIMEOUT)
         returncode = await process.wait()
-        full_output = "\n".join(output_lines[-30:])
+
+        elapsed = round(time.time() - start_time, 1)
+        full_output = "\n".join(list(output_lines)[-25:])
         safe_full_output = html.escape(full_output[-3500:])
 
-        try:
-            if returncode == 0:
-                await status_msg.edit_text(
-                    f"✅ <b>{safe_title} 完成</b>\n<code>{safe_full_output}</code>",
-                    parse_mode="HTML",
-                )
-            else:
-                await status_msg.edit_text(
-                    f"❌ <b>{safe_title} 失败 (exit {returncode})</b>\n<code>{safe_full_output}</code>",
-                    parse_mode="HTML",
-                )
-        except Exception:
-            pass  # 忽略内容未变引起的 Message is not modified 异常
+        if _CANCEL_REQUESTED:
+            await status_msg.edit_text(
+                f"🛑 <b>{safe_title} 已取消</b>\n"
+                f"⏱ <b>已用时：</b>{elapsed}s\n"
+                f"<code>{safe_full_output}</code>",
+                parse_mode="HTML"
+            )
+            return False
 
-        return returncode == 0
+        if returncode == 0:
+            p_done = render_progress_bar(100)
+            await status_msg.edit_text(
+                f"✅ <b>{safe_title} 完成</b> [{p_done}]\n"
+                f"⏱ <b>总耗时：</b>{elapsed}s\n"
+                f"<code>{safe_full_output}</code>",
+                parse_mode="HTML",
+            )
+            return True
+        else:
+            await status_msg.edit_text(
+                f"❌ <b>{safe_title} 失败 (Code {returncode})</b>\n"
+                f"⏱ <b>耗时：</b>{elapsed}s\n"
+                f"<code>{safe_full_output}</code>",
+                parse_mode="HTML",
+            )
+            return False
 
-    except Exception as e:
-        safe_err = html.escape(str(e))
-        try:
-            await status_msg.edit_text(f"❌ 执行异常: {safe_err}")
-        except Exception:
-            pass
+    except asyncio.TimeoutError:
+        if process:
+            try: process.kill()
+            except Exception: pass
+        await status_msg.edit_text(
+            f"⏰ <b>{safe_title} 超时中断</b>\n"
+            f"单条指令耗时超过 {COMMAND_TIMEOUT} 秒，已强行终止。",
+            parse_mode="HTML"
+        )
         return False
 
+    except Exception as e:
+        if process:
+            try: process.kill()
+            except Exception: pass
+        await status_msg.edit_text(f"❌ 执行发生异常: {html.escape(str(e))}", parse_mode="HTML")
+        return False
+    finally:
+        _CURRENT_PROCESS = None
 
-# ==================== 核心面板与菜单交互 ====================
+
+# ==================== 核心面板与分页菜单 ====================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_permission(update):
         return
     await cmd_list(update, context)
 
-async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """主面板列表"""
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1):
+    """主面板列表（支持分页、统计与分组）"""
     if not await check_permission(update):
         return
 
     user_str = get_user_identifier(update)
-    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 查看主项目列表")
+    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 查看项目列表 (页码: {page})")
 
     projects = await get_compose_projects()
-    
+    total_projects = len(projects)
     running_cnt = sum(1 for p in projects if "running" in p["status"].lower())
     
-    text = "🐳 <b>Docker Compose 管理面板</b>\n"
-    text += f"📊 <b>项目总数：</b>{len(projects)}  |  🟢 <b>运行中：</b>{running_cnt}\n"
-    text += "────────────────\n"
+    # 分页计算
+    total_pages = max(1, (total_projects + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * PAGE_SIZE
+    page_projects = projects[start_idx:start_idx + PAGE_SIZE]
 
-    keyboard = [
-        [InlineKeyboardButton("🧹 00. 清理未使用镜像", callback_data="prune")]
-    ]
+    text = "🐳 <b>Docker Compose 管理面板</b>\n"
+    text += f"📊 <b>统计：</b>共 {total_projects} 个项目 | 🟢 {running_cnt} 运行中 | 🟡 {total_projects - running_cnt} 停止\n"
+    text += f"📖 <b>页码：</b>{page} / {total_pages}\n"
+    text += "───────────────────────────\n\n"
+
+    keyboard = []
 
     if not projects:
-        text += "\n⚠️ 暂未检测到 Docker Compose 项目"
+        text += "⚠️ 暂未检测到任何 Docker Compose 项目"
     else:
-        for i, p in enumerate(projects, 1):
+        for i, p in enumerate(page_projects, start=start_idx + 1):
             num = f"{i:02d}"
             name = p["name"]
             status = p["status"]
             status_icon = "🟢" if "running" in status.lower() else "🟡"
             
+            disp_name = name[:26] + ".." if len(name) > 28 else name
             safe_name = html.escape(name)
             safe_dir = html.escape(p["dir"])
             services_str = ", ".join(p["services"]) if p["services"] else "-"
             safe_services = html.escape(services_str)
 
-            text += f"<b>{num}.</b> {safe_name}  {status_icon} [{html.escape(status)}]\n"
+            text += f"<b>{num}.</b> {safe_name} {status_icon} <code>[{html.escape(status)}]</code>\n"
             text += f"     📂 <code>{safe_dir}</code>\n"
-            text += f"     📦 {safe_services}\n\n"
+            text += f"     📦 服务({len(p['services'])}): {safe_services}\n\n"
             
-            # 使用精简的 callback_data 前缀，确保不破 64 字节限制
             if len(p["services"]) > 1:
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"{num}. {name} (多服务)",
-                        callback_data=f"p_sel:{name}"
-                    )
-                ])
+                cb_data = create_cb_data("p_sel", {"name": name, "page": page})
+                keyboard.append([InlineKeyboardButton(f"⚙️ {num}. {disp_name} (多服务)", callback_data=cb_data)])
             else:
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"{num}. {name}",
-                        callback_data=f"up_s_ask:{name}"
-                    )
-                ])
+                cb_data = create_cb_data("up_s_ask", {"name": name, "page": page})
+                keyboard.append([InlineKeyboardButton(f"🚀 {num}. {disp_name}", callback_data=cb_data)])
 
+    # 分页翻页控制行
+    page_nav = []
+    if page > 1:
+        cb_prev = create_cb_data("page_turn", {"page": page - 1})
+        page_nav.append(InlineKeyboardButton("◀ 上一页", callback_data=cb_prev))
+    page_nav.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        cb_next = create_cb_data("page_turn", {"page": page + 1})
+        page_nav.append(InlineKeyboardButton("下一页 ▶", callback_data=cb_next))
+    
+    keyboard.append(page_nav)
+
+    # 快捷功能行
+    cb_prune_menu = create_cb_data("prune_menu")
     keyboard.append([
-        InlineKeyboardButton("🔄 刷新列表", callback_data="refresh"),
+        InlineKeyboardButton("🧹 镜像清理菜单", callback_data=cb_prune_menu),
         InlineKeyboardButton("⬆️ 升级全部项目", callback_data="upgrade_all")
     ])
+    keyboard.append([InlineKeyboardButton("🔄 刷新状态", callback_data=create_cb_data("page_turn", {"page": page}))])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text, reply_markup=reply_markup, parse_mode="HTML"
-        )
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
         await update.callback_query.answer()
     else:
-        await update.message.reply_text(
-            text, reply_markup=reply_markup, parse_mode="HTML"
-        )
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
-async def show_project_detail(update: Update, project_name: str):
-    """二级菜单：针对包含多个服务容器的项目"""
+async def show_project_detail(update: Update, project_name: str, back_page: int = 1):
+    """二级菜单：项目详情控制页"""
     query = update.callback_query
     projects = await get_compose_projects()
     target_p = next((p for p in projects if p["name"] == project_name), None)
@@ -379,36 +454,28 @@ async def show_project_detail(update: Update, project_name: str):
     safe_name = html.escape(target_p['name'])
     safe_dir = html.escape(target_p['dir'])
 
-    text = f"📦 <b>项目详情：{safe_name}</b>\n\n"
-    text += f"📂 <b>配置路径：</b>\n<code>{safe_dir}</code>\n\n"
-    text += "⚙️ <b>请选择升级范围：</b>\n"
+    text = f"📦 <b>项目卡片：{safe_name}</b>\n\n"
+    text += f"📂 <b>路径：</b><code>{safe_dir}</code>\n"
+    text += f"🟢 <b>状态：</b>{target_p['status']}\n\n"
+    text += "⚙️ <b>请选择操作控制范围：</b>\n"
 
-    keyboard = [
-        [InlineKeyboardButton("⚡ 升级整个项目 (所有容器)", callback_data=f"up_c_ask:{project_name}")]
-    ]
+    cb_all = create_cb_data("up_s_ask", {"name": project_name, "page": back_page})
+    keyboard = [[InlineKeyboardButton("⚡ 升级全部服务容器", callback_data=cb_all)]]
 
     if target_p["services"]:
         for svc in target_p["services"]:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"🔹 仅升级服务: {svc}",
-                    callback_data=f"up_svc_ask:{project_name}:{svc}"
-                )
-            ])
+            cb_svc = create_cb_data("up_svc_ask", {"name": project_name, "svc": svc, "page": back_page})
+            keyboard.append([InlineKeyboardButton(f"🔹 仅升级服务: {svc}", callback_data=cb_svc)])
 
-    keyboard.append([InlineKeyboardButton("🔙 返回主菜单", callback_data="refresh")])
+    cb_back = create_cb_data("page_turn", {"page": back_page})
+    keyboard.append([InlineKeyboardButton("🔙 返回列表", callback_data=cb_back)])
 
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
-    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     await query.answer()
 
 
 # ==================== 确认弹窗函数 ====================
-async def ask_single_upgrade(update: Update, project_name: str):
-    """项目升级确认界面"""
+async def ask_single_upgrade(update: Update, project_name: str, back_page: int = 1):
     query = update.callback_query
     projects = await get_compose_projects()
     target_p = next((p for p in projects if p["name"] == project_name), None)
@@ -416,29 +483,29 @@ async def ask_single_upgrade(update: Update, project_name: str):
     safe_name = html.escape(project_name)
     safe_dir = html.escape(target_p["dir"]) if target_p else "未知路径"
 
+    cb_confirm = create_cb_data("up_p_do", {"name": project_name})
+    cb_back = create_cb_data("page_turn", {"page": back_page})
+    
     keyboard = [
         [
-            InlineKeyboardButton("✅ 确认升级", callback_data=f"up_p_do:{project_name}"),
-            InlineKeyboardButton("🔙 返回", callback_data="refresh"),
+            InlineKeyboardButton("✅ 确认升级", callback_data=cb_confirm),
+            InlineKeyboardButton("🔙 取消返回", callback_data=cb_back),
         ]
     ]
 
     text = (
-        f"🚀 <b>确认升级项目 [{safe_name}]？</b>\n\n"
-        f"📂 <b>路径：</b><code>{safe_dir}</code>\n\n"
-        f"💡 将会自动执行 <code>pull</code> 拉取新镜像并 <code>up -d</code> 重建启动。"
+        f"🚀 <b>升级确认 - [{safe_name}]</b>\n\n"
+        f"📂 <b>工作目录：</b><code>{safe_dir}</code>\n"
+        f"🛠 <b>执行步骤：</b>\n"
+        f"  1. <code>docker compose pull</code>\n"
+        f"  2. <code>docker compose up -d</code>\n"
     )
 
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     await query.answer()
 
 
-async def ask_svc_upgrade(update: Update, project_name: str, service_name: str):
-    """指定服务升级确认界面"""
+async def ask_svc_upgrade(update: Update, project_name: str, service_name: str, back_page: int = 1):
     query = update.callback_query
     projects = await get_compose_projects()
     target_p = next((p for p in projects if p["name"] == project_name), None)
@@ -447,37 +514,35 @@ async def ask_svc_upgrade(update: Update, project_name: str, service_name: str):
     safe_s = html.escape(service_name)
     safe_dir = html.escape(target_p["dir"]) if target_p else "未知路径"
 
+    cb_confirm = create_cb_data("up_svc_do", {"name": project_name, "svc": service_name})
+    cb_back = create_cb_data("p_sel", {"name": project_name, "page": back_page})
+
     keyboard = [
         [
-            InlineKeyboardButton("✅ 确认升级", callback_data=f"up_svc_do:{project_name}:{service_name}"),
-            InlineKeyboardButton("🔙 返回", callback_data=f"p_sel:{project_name}"),
+            InlineKeyboardButton("✅ 确认升级单一服务", callback_data=cb_confirm),
+            InlineKeyboardButton("🔙 返回", callback_data=cb_back),
         ]
     ]
 
     text = (
-        f"🚀 <b>确认升级服务 [{safe_s}]？</b>\n\n"
+        f"🚀 <b>服务升级确认 - [{safe_s}]</b>\n\n"
         f"📦 <b>所属项目：</b>{safe_p}\n"
-        f"📂 <b>路径：</b><code>{safe_dir}</code>\n\n"
-        f"💡 仅更新此单一服务容器，不会影响项目内其他服务。"
+        f"📂 <b>工作路径：</b><code>{safe_dir}</code>\n\n"
+        f"💡 仅重建并升级 <code>{safe_s}</code>，项目内其他容器不受影响。"
     )
 
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     await query.answer()
 
 
-# ==================== 执行底层逻辑 ====================
+# ==================== 执行逻辑底座 ====================
 async def do_upgrade_project(update: Update, context: ContextTypes.DEFAULT_TYPE, project_name: str):
-    """升级整个 Compose 项目"""
     lock = get_exec_lock()
     query = update.callback_query
     user_str = get_user_identifier(update)
 
     if lock.locked():
-        if query: await query.answer("⚠️ 当前已有其他任务在运行中", show_alert=True)
+        if query: await query.answer("⚠️ 当前已有正在运行的部署/清理任务", show_alert=True)
         return
 
     if query: await query.answer()
@@ -487,329 +552,11 @@ async def do_upgrade_project(update: Update, context: ContextTypes.DEFAULT_TYPE,
         target_p = next((p for p in projects if p["name"] == project_name), None)
 
         if not target_p:
-            await update.effective_message.reply_text(f"❌ 未找到项目: <code>{html.escape(project_name)}</code>", parse_mode="HTML")
+            await update.effective_message.reply_text(f"❌ 找不到对应项目: <code>{html.escape(project_name)}</code>", parse_mode="HTML")
             return
 
         message = update.effective_message
         safe_name = html.escape(target_p['name'])
         logger.info(f"🚀 [操作审计] 用户 [{user_str}] 升级完整项目 [{project_name}]")
 
-        await message.reply_text(f"🚀 开始升级项目 <b>{safe_name}</b>...", parse_mode="HTML")
-
-        pull_ok = await run_command_with_feedback(
-            update, context,
-            ["docker", "compose", "pull"],
-            cwd=target_p["dir"],
-            title=f"拉取镜像 - {target_p['name']}",
-        )
-        if not pull_ok: return
-
-        up_ok = await run_command_with_feedback(
-            update, context,
-            ["docker", "compose", "up", "-d"],
-            cwd=target_p["dir"],
-            title=f"重建启动 - {target_p['name']}",
-        )
-
-        if up_ok:
-            logger.info(f"✅ 项目 [{project_name}] 升级完成")
-            await message.reply_text(f"🎉 项目 <b>{safe_name}</b> 升级完成！", parse_mode="HTML")
-
-
-async def do_upgrade_service(update: Update, context: ContextTypes.DEFAULT_TYPE, project_name: str, service_name: str):
-    """仅升级项目下的某一个服务容器"""
-    lock = get_exec_lock()
-    query = update.callback_query
-    user_str = get_user_identifier(update)
-
-    if lock.locked():
-        if query: await query.answer("⚠️ 当前已有其他任务在运行中", show_alert=True)
-        return
-
-    if query: await query.answer()
-
-    async with lock:
-        projects = await get_compose_projects()
-        target_p = next((p for p in projects if p["name"] == project_name), None)
-
-        if not target_p:
-            await update.effective_message.reply_text(f"❌ 未找到项目: <code>{html.escape(project_name)}</code>", parse_mode="HTML")
-            return
-
-        message = update.effective_message
-        safe_name = html.escape(target_p['name'])
-        safe_svc = html.escape(service_name)
-
-        logger.info(f"🚀 [操作审计] 用户 [{user_str}] 升级项目 [{project_name}] 中的单服务 [{service_name}]")
-
-        await message.reply_text(f"🚀 开始升级 <b>{safe_name}</b> 下的服务 <code>{safe_svc}</code>...", parse_mode="HTML")
-
-        pull_ok = await run_command_with_feedback(
-            update, context,
-            ["docker", "compose", "pull", service_name],
-            cwd=target_p["dir"],
-            title=f"拉取 - {service_name}",
-        )
-        if not pull_ok: return
-
-        up_ok = await run_command_with_feedback(
-            update, context,
-            ["docker", "compose", "up", "-d", service_name],
-            cwd=target_p["dir"],
-            title=f"重建 - {service_name}",
-        )
-
-        if up_ok:
-            logger.info(f"✅ 服务 [{service_name}] 升级完成")
-            await message.reply_text(f"🎉 服务 <code>{safe_svc}</code> 升级完成！", parse_mode="HTML")
-
-
-async def do_upgrade_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """升级全部项目"""
-    lock = get_exec_lock()
-    query = update.callback_query
-    user_str = get_user_identifier(update)
-
-    if lock.locked():
-        if query: await query.answer("⚠️ 当前已有其他任务在运行中", show_alert=True)
-        return
-
-    if query: await query.answer()
-
-    async with lock:
-        projects = await get_compose_projects()
-        if not projects:
-            await update.effective_message.reply_text("未检测到可升级的项目")
-            return
-
-        logger.info(f"🚀 [操作审计] 用户 [{user_str}] 开始批量升级全部 {len(projects)} 个项目...")
-        message = update.effective_message
-        await message.reply_text(f"🚀 开始升级全部 {len(projects)} 个项目...")
-
-        for i, p in enumerate(projects, 1):
-            p_name = p['name']
-            safe_name = html.escape(p_name)
-            
-            await message.reply_text(f"[{i}/{len(projects)}] 升级 <b>{safe_name}</b>...", parse_mode="HTML")
-            
-            pull_ok = await run_command_with_feedback(
-                update, context,
-                ["docker", "compose", "pull"],
-                cwd=p["dir"],
-                title=f"拉取 - {p_name}",
-            )
-            
-            if pull_ok:
-                await run_command_with_feedback(
-                    update, context,
-                    ["docker", "compose", "up", "-d"],
-                    cwd=p["dir"],
-                    title=f"启动 - {p_name}",
-                )
-
-        await message.reply_text("🎉 全部项目批量升级完成！")
-
-
-async def cmd_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_permission(update): return
-    
-    # 若从按钮触发，回应 answer 以停止转圈动画
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    message = update.effective_message
-    await message.reply_text("🔍 正在扫描未使用的无头 (dangling) 镜像...")
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "images", "-f", "dangling=true",
-            "--format", "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
-        )
-        stdout, _ = await proc.communicate()
-        dry_output = stdout.decode('utf-8', errors='replace').strip()
-
-        if not dry_output or len(dry_output.splitlines()) <= 1:
-            await message.reply_text("✨ 当前系统内没有需要清理的无用镜像！")
-            return
-    except Exception as e:
-        dry_output = str(e)
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ 确认清理", callback_data="prune_confirm"),
-            InlineKeyboardButton("❌ 取消", callback_data="cancel"),
-        ]
-    ]
-    safe_dry = html.escape(dry_output[-3000:])
-    await message.reply_text(
-        f"🧹 <b>将清理以下悬空镜像：</b>\n<code>{safe_dry}</code>\n\n确认清理吗？",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
-    )
-
-async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    lock = get_exec_lock()
-    if lock.locked():
-        await query.answer("⚠️ 当前已有其他任务在运行中", show_alert=True)
-        return
-    await query.answer()
-    async with lock:
-        await query.edit_message_text("🗑 正在清理无用镜像，请稍等...")
-        await run_command_with_feedback(
-            update, context,
-            ["docker", "image", "prune", "-a", "-f"],
-            title="清理未使用镜像",
-        )
-
-
-# ==================== 命令行指令解析 ====================
-async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_permission(update):
-        return
-
-    user_str = get_user_identifier(update)
-
-    if not context.args:
-        await update.message.reply_text(
-            "💡 <b>命令行升级说明：</b>\n"
-            "• <code>/upgrade 01</code> : 升级第 01 个项目的所有容器\n"
-            "• <code>/upgrade 01 emby</code> : 仅升级第 01 项目中的 emby 容器\n"
-            "• <code>/upgrade all</code> : 批量升级所有项目",
-            parse_mode="HTML"
-        )
-        return
-
-    arg = context.args[0].lower()
-    service_name = context.args[1] if len(context.args) > 1 else None
-    logger.info(f"▶️ [操作审计] 用户 [{user_str}] 执行命令: /upgrade {' '.join(context.args)}")
-
-    if arg in ("all", "a"):
-        keyboard = [[
-            InlineKeyboardButton("🚀 确认升级全部", callback_data="upgrade_all_confirm"),
-            InlineKeyboardButton("❌ 取消", callback_data="cancel"),
-        ]]
-        await update.message.reply_text("⚠️ <b>确认升级全部项目的全部容器？</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-        return
-
-    try:
-        num = int(arg)
-        if num < 1: raise ValueError
-        idx = num - 1
-        
-        projects = await get_compose_projects()
-        if 0 <= idx < len(projects):
-            target_p = projects[idx]
-            p_name = target_p['name']
-            safe_p_name = html.escape(p_name)
-            safe_dir = html.escape(target_p['dir'])
-            
-            if service_name:
-                safe_svc = html.escape(service_name)
-                keyboard = [[
-                    InlineKeyboardButton("✅ 确认升级指定服务", callback_data=f"up_svc_do:{p_name}:{service_name}"),
-                    InlineKeyboardButton("❌ 取消", callback_data="cancel"),
-                ]]
-                await update.message.reply_text(
-                    f"🚀 确认升级 <b>{safe_p_name}</b> 中的服务 <code>{safe_svc}</code>？\n📂 路径：<code>{safe_dir}</code>",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="HTML"
-                )
-            else:
-                keyboard = [[
-                    InlineKeyboardButton("✅ 确认升级整个项目", callback_data=f"up_p_do:{p_name}"),
-                    InlineKeyboardButton("❌ 取消", callback_data="cancel"),
-                ]]
-                await update.message.reply_text(
-                    f"🚀 确认升级项目 <b>{safe_p_name}</b>？\n📂 路径：<code>{safe_dir}</code>",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="HTML"
-                )
-        else:
-            await update.message.reply_text("❌ 无效的项目序号")
-    except ValueError:
-        await update.message.reply_text("❌ 格式不正确。示例: <code>/upgrade 01</code> 或 <code>/upgrade 01 emby</code>", parse_mode="HTML")
-
-
-# ==================== 按钮回调分发 Handler (短名路由) ====================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not await check_permission(update):
-        return
-
-    data = query.data
-
-    if data == "refresh":
-        await cmd_list(update, context)
-
-    elif data == "prune":
-        await cmd_prune(update, context)
-
-    elif data == "prune_confirm":
-        await do_prune(update, context)
-
-    elif data == "cancel":
-        await query.answer("已取消")
-        await query.edit_message_text("❌ 已取消操作")
-
-    elif data.startswith("p_sel:"):
-        p_name = data.split(":", 1)[1]
-        await show_project_detail(update, p_name)
-
-    # 询问 confirmation 拦截器 (使用精简 callback 前缀)
-    elif data.startswith("up_s_ask:") or data.startswith("up_c_ask:"):
-        p_name = data.split(":", 1)[1]
-        await ask_single_upgrade(update, p_name)
-
-    elif data.startswith("up_svc_ask:"):
-        _, p_name, svc_name = data.split(":", 2)
-        await ask_svc_upgrade(update, p_name, svc_name)
-
-    # 实际底层执行逻辑触发点
-    elif data.startswith("up_p_do:"):
-        p_name = data.split(":", 1)[1]
-        await do_upgrade_project(update, context, p_name)
-
-    elif data.startswith("up_svc_do:"):
-        _, p_name, svc_name = data.split(":", 2)
-        await do_upgrade_service(update, context, p_name, svc_name)
-
-    elif data == "upgrade_all":
-        await query.answer()
-        projects = await get_compose_projects()
-        keyboard = [[
-            InlineKeyboardButton("🚀 确认升级全部", callback_data="upgrade_all_confirm"),
-            InlineKeyboardButton("❌ 取消", callback_data="cancel"),
-        ]]
-        await query.edit_message_text(
-            f"⚠️ <b>确认批量升级全部项目？</b>\n共包含 {len(projects)} 个 Compose 项目。",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-
-    elif data == "upgrade_all_confirm":
-        await do_upgrade_all(update, context)
-
-
-# ==================== 主入口 ====================
-def main():
-    if not BOT_TOKEN:
-        logger.error("请设置 BOT_TOKEN 环境变量")
-        return
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("prune", cmd_prune))
-    app.add_handler(CommandHandler("upgrade", cmd_upgrade))
-    
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_error_handler(global_error_handler)
-
-    logger.info("Bot 成功启动！")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
+        await message.reply_text(f"🚀 <b>开始升级项目 [{safe_name}]</b>", parse_mode
