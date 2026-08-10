@@ -320,12 +320,21 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"     路径: <code>{safe_dir}</code>\n"
             text += f"     容器: {safe_services}\n\n"
             
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{num}. {name} (点击管理)",
-                    callback_data=f"select_project:{name}"
-                )
-            ])
+            # 判断服务数量：大于1服务进入二级选单；单容器项目直接跳过二级菜单触发升级
+            if len(p["services"]) > 1:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{num}. {name} (多服务/选单)",
+                        callback_data=f"select_project:{name}"
+                    )
+                ])
+            else:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{num}. {name} (点击升级)",
+                        callback_data=f"upgrade_confirm:{name}"
+                    )
+                ])
 
     keyboard.append([InlineKeyboardButton("🔄 刷新列表", callback_data="refresh")])
     keyboard.append([InlineKeyboardButton("⬆️ 升级全部项目", callback_data="upgrade_all")])
@@ -344,7 +353,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_project_detail(update: Update, project_name: str):
-    """二级菜单：调整为更清晰的排版与精简文案"""
+    """二级菜单：仅针对包含多服务容器的项目"""
     query = update.callback_query
     projects = await get_compose_projects()
     target_p = next((p for p in projects if p["name"] == project_name), None)
@@ -359,13 +368,12 @@ async def show_project_detail(update: Update, project_name: str):
     text = f"📋 <b>Docker Compose 升级助手 - TGBOT版</b>\n\n"
     text += f"📦 <b>项目名称：</b>{safe_name}\n"
     text += f"📁 <b>配置路径：</b>\n<code>{safe_dir}</code>\n\n"
-    text += "请选择具体要升级的服务容器："
+    text += "⚙️ <b>多服务项目选单：</b>\n"
 
     keyboard = [
         [InlineKeyboardButton("⚡ 升级整个项目 (所有容器)", callback_data=f"upgrade_confirm:{project_name}")]
     ]
 
-    # 列出每个单独的服务容器（文案已精简为 🔹 仅升级:）
     if target_p["services"]:
         for svc in target_p["services"]:
             keyboard.append([
@@ -410,7 +418,7 @@ async def do_upgrade_project(update: Update, context: ContextTypes.DEFAULT_TYPE,
         safe_name = html.escape(target_p['name'])
         logger.info(f"🚀 [操作审计] 用户 [{user_str}] 升级完整项目 [{project_name}]")
 
-        await message.reply_text(f"🚀 开始升级项目 <b>{safe_name}</b> (全部服务)...", parse_mode="HTML")
+        await message.reply_text(f"🚀 开始升级项目 <b>{safe_name}</b>...", parse_mode="HTML")
 
         pull_ok = await run_command_with_feedback(
             update, context,
@@ -429,7 +437,7 @@ async def do_upgrade_project(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         if up_ok:
             logger.info(f"✅ 项目 [{project_name}] 升级完成")
-            await message.reply_text(f"✅ 项目 <b>{safe_name}</b> 全部服务升级完成", parse_mode="HTML")
+            await message.reply_text(f"✅ 项目 <b>{safe_name}</b> 升级完成", parse_mode="HTML")
 
 
 async def do_upgrade_service(update: Update, context: ContextTypes.DEFAULT_TYPE, project_name: str, service_name: str):
