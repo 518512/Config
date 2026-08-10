@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 LDMG - Lite Docker Manager Gram
-基于 TG Bot 的 Docker Compose 升级助手 (支持单服务选单升级)
+基于 TG Bot 的 Docker Compose 升级助手 (支持单服务选单升级 + 确认流程)
 """
 
 import os
@@ -320,19 +320,20 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"     路径: <code>{safe_dir}</code>\n"
             text += f"     容器: {safe_services}\n\n"
             
-            # 判断服务数量：大于1服务进入二级选单；单容器项目直接跳过二级菜单触发升级
+            # 多服务项目：进入二级服务选单
             if len(p["services"]) > 1:
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"{num}. {name} (多服务/选单)",
+                        f"{num}. {name} (多服务选单)",
                         callback_data=f"select_project:{name}"
                     )
                 ])
+            # 单服务项目：点击直接弹出二次确认
             else:
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"{num}. {name} (点击升级)",
-                        callback_data=f"upgrade_confirm:{name}"
+                        f"{num}. {name}",
+                        callback_data=f"upgrade_single_ask:{name}"
                     )
                 ])
 
@@ -371,7 +372,7 @@ async def show_project_detail(update: Update, project_name: str):
     text += "⚙️ <b>多服务项目选单：</b>\n"
 
     keyboard = [
-        [InlineKeyboardButton("⚡ 升级整个项目 (所有容器)", callback_data=f"upgrade_confirm:{project_name}")]
+        [InlineKeyboardButton("⚡ 升级整个项目 (所有容器)", callback_data=f"upgrade_confirm_ask:{project_name}")]
     ]
 
     if target_p["services"]:
@@ -379,7 +380,7 @@ async def show_project_detail(update: Update, project_name: str):
             keyboard.append([
                 InlineKeyboardButton(
                     f"🔹 仅升级: {svc}",
-                    callback_data=f"upgrade_svc_confirm:{project_name}:{svc}"
+                    callback_data=f"upgrade_svc_ask:{project_name}:{svc}"
                 )
             ])
 
@@ -389,6 +390,45 @@ async def show_project_detail(update: Update, project_name: str):
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
+    )
+    await query.answer()
+
+
+# ==================== 确认弹窗函数 ====================
+async def ask_single_upgrade(update: Update, project_name: str):
+    """单服务容器升级确认界面"""
+    query = update.callback_query
+    safe_name = html.escape(project_name)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ 确认升级", callback_data=f"upgrade_confirm:{project_name}"),
+            InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+        ]
+    ]
+    await query.edit_message_text(
+        f"⚠️ <b>确认升级项目 [{safe_name}]？</b>\n将会执行 `pull` 与 `up -d`。",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    await query.answer()
+
+async def ask_svc_upgrade(update: Update, project_name: str, service_name: str):
+    """单独服务升级确认界面"""
+    query = update.callback_query
+    safe_p = html.escape(project_name)
+    safe_s = html.escape(service_name)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ 确认升级", callback_data=f"upgrade_svc_confirm:{project_name}:{service_name}"),
+            InlineKeyboardButton("❌ 取消", callback_data="cancel"),
+        ]
+    ]
+    await query.edit_message_text(
+        f"⚠️ <b>确认升级项目 [{safe_p}] 中的服务 [{safe_s}]？</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
     )
     await query.answer()
 
@@ -468,7 +508,6 @@ async def do_upgrade_service(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         await message.reply_text(f"🚀 开始升级项目 <b>{safe_name}</b> 中的服务 <code>{safe_svc}</code>...", parse_mode="HTML")
 
-        # 仅 Pull 指定服务
         pull_ok = await run_command_with_feedback(
             update, context,
             ["docker", "compose", "pull", service_name],
@@ -477,7 +516,6 @@ async def do_upgrade_service(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         if not pull_ok: return
 
-        # 仅 Up -d 指定服务
         up_ok = await run_command_with_feedback(
             update, context,
             ["docker", "compose", "up", "-d", service_name],
@@ -677,6 +715,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p_name = data.split(":", 1)[1]
         await show_project_detail(update, p_name)
 
+    # 单服务项目与多服务项目弹出二次确认的请求
+    elif data.startswith("upgrade_single_ask:") or data.startswith("upgrade_confirm_ask:"):
+        p_name = data.split(":", 1)[1]
+        await ask_single_upgrade(update, p_name)
+
+    elif data.startswith("upgrade_svc_ask:"):
+        _, p_name, svc_name = data.split(":", 2)
+        await ask_svc_upgrade(update, p_name, svc_name)
+
+    # 实际触发执行的操作回调
     elif data.startswith("upgrade_confirm:"):
         p_name = data.split(":", 1)[1]
         await do_upgrade_project(update, context, p_name)
