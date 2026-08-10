@@ -318,9 +318,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             text += f"<b>{num}.</b> {safe_name}  {status_icon} [{html.escape(status)}]\n"
             text += f"     路径: <code>{safe_dir}</code>\n"
-            text += f"     服务容器: {safe_services}\n\n"
+            text += f"     容器: {safe_services}\n\n"
             
-            # 点击项目名称，进入子服务选择菜单
             keyboard.append([
                 InlineKeyboardButton(
                     f"{num}. {name} (点击管理)",
@@ -345,7 +344,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_project_detail(update: Update, project_name: str):
-    """二级菜单：选择具体升级哪个服务或整包升级"""
+    """二级菜单：调整为更清晰的排版与精简文案"""
     query = update.callback_query
     projects = await get_compose_projects()
     target_p = next((p for p in projects if p["name"] == project_name), None)
@@ -357,20 +356,21 @@ async def show_project_detail(update: Update, project_name: str):
     safe_name = html.escape(target_p['name'])
     safe_dir = html.escape(target_p['dir'])
 
-    text = f"📦 项目: <b>{safe_name}</b>\n"
-    text += f"📁 路径: <code>{safe_dir}</code>\n\n"
-    text += "请选择要升级的内容："
+    text = f"📋 <b>Docker Compose 升级助手 - TGBOT版</b>\n\n"
+    text += f"📦 <b>项目名称：</b>{safe_name}\n"
+    text += f"📁 <b>配置路径：</b>\n<code>{safe_dir}</code>\n\n"
+    text += "请选择具体要升级的服务容器："
 
     keyboard = [
         [InlineKeyboardButton("⚡ 升级整个项目 (所有容器)", callback_data=f"upgrade_confirm:{project_name}")]
     ]
 
-    # 列出每个单独的服务容器
+    # 列出每个单独的服务容器（文案已精简为 🔹 仅升级:）
     if target_p["services"]:
         for svc in target_p["services"]:
             keyboard.append([
                 InlineKeyboardButton(
-                    f"🔹 仅升级服务: {svc}",
+                    f"🔹 仅升级: {svc}",
                     callback_data=f"upgrade_svc_confirm:{project_name}:{svc}"
                 )
             ])
@@ -579,12 +579,6 @@ async def do_prune(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== 命令行指令响应解析 ====================
 async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    支持:
-    /upgrade 01         (升级 01 项目下所有容器)
-    /upgrade 01 emby    (仅升级 01 项目下的 emby 容器)
-    /upgrade all        (升级全部)
-    """
     if not await check_permission(update):
         return
 
@@ -623,7 +617,6 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             p_name = target_p['name']
             safe_p_name = html.escape(p_name)
             
-            # 情况 1：指定了具体服务容器 (/upgrade 01 emby)
             if service_name:
                 safe_svc = html.escape(service_name)
                 keyboard = [[
@@ -635,7 +628,6 @@ async def cmd_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
                 )
-            # 情况 2：仅指定了项目序号 (/upgrade 01)
             else:
                 keyboard = [[
                     InlineKeyboardButton("✅ 确认升级整个项目", callback_data=f"upgrade_confirm:{p_name}"),
@@ -659,7 +651,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data
-    user_str = get_user_identifier(update)
 
     if data == "refresh":
         await cmd_list(update, context)
@@ -674,22 +665,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("已取消")
         await query.edit_message_text("❌ 已取消操作")
 
-    # 点击一级菜单的项目 -> 进入服务二级菜单
     elif data.startswith("select_project:"):
         p_name = data.split(":", 1)[1]
         await show_project_detail(update, p_name)
 
-    # 确认升级整包项目
     elif data.startswith("upgrade_confirm:"):
         p_name = data.split(":", 1)[1]
         await do_upgrade_project(update, context, p_name)
 
-    # 确认升级单个指定服务容器
     elif data.startswith("upgrade_svc_confirm:"):
         _, p_name, svc_name = data.split(":", 2)
         await do_upgrade_service(update, context, p_name, svc_name)
 
-    # 批量升级所有项目
     elif data == "upgrade_all":
         await query.answer()
         projects = await get_compose_projects()
