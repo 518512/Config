@@ -1,3 +1,5 @@
+**停更，发现有AI高手再做整体优化了**
+
 **LDMG** - Lite Docker Manger Gram
 
 - 1、起因最近很多镜像升级速度比较频繁，每次都要进ssh ，进目录， down pull up
